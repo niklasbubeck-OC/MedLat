@@ -1,0 +1,497 @@
+import torch 
+import torch.nn as nn
+from src.registry import register_model
+from src.modules import Encoder, Decoder
+from src.discrete.vq_models import VQModel
+from src.discrete.quantizer import *
+
+__all__ = ["VQModel_f4", "VQModel_f8", "VQModel_f16", "MSRQModel_f8", "ViTVQModel_Small", "ViTVQModel_Base", "ViTVQModel_Large", "LFQModel_f4"]
+
+@register_model("discrete.vq.f4d3")
+def VQ_f4d3(
+        # --- encoder/decoder config ---
+        img_size=256,
+        dims=2,
+        double_z=False,
+        z_channels=3,
+        in_channels=3,
+        out_ch=3,
+        ch=128,
+        ch_mult=[1, 2, 4],
+        num_res_blocks=2,
+        attn_resolutions=[],
+        dropout=0.0,
+        # --- quantizer config ---
+        n_e=8192,
+        e_dim=3,
+        beta=0.25,
+        use_ema=False,
+        ema_decay=0.99,
+        ema_eps=1e-5,
+        **kwargs
+    ):
+    """
+    Instantiate a VQModel (f4 config) with flexible, efficient parameter override.
+    https://github.com/CompVis/latent-diffusion/blob/main/models/first_stage_models/vq-f4/config.yaml
+    """
+    encoder = Encoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    decoder = Decoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    quantizer = VectorQuantizer2(
+        n_e=n_e,
+        e_dim=e_dim,
+        beta=beta,
+        use_ema=use_ema,
+        ema_decay=ema_decay,
+        ema_eps=ema_eps
+    )
+    return VQModel(encoder, decoder, quantizer, **kwargs)
+
+
+@register_model(f"discrete.vq.f8d4")
+def VQ_f8d4(
+        # --- encoder/decoder config ---
+        img_size=256,
+        dims=2,
+        double_z=False,
+        z_channels=4,
+        in_channels=1,
+        out_ch=1,
+        ch=128,
+        ch_mult=[1, 2, 2, 4],
+        num_res_blocks=2,
+        attn_resolutions=[32],
+        dropout=0.0,
+        # --- quantizer config ---
+        n_e=16384,
+        e_dim=4,
+        beta=0.25,
+        remap=None,
+        use_ema=False,
+        ema_decay=0.99,
+        ema_eps=1e-5,
+        **kwargs
+    ):
+    """
+    Instantiate a VQModel (f8 config) with flexible, efficient parameter override.
+    https://github.com/CompVis/latent-diffusion/blob/main/models/first_stage_models/vq-f8/config.yaml
+    """
+    encoder = Encoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    decoder = Decoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    quantizer = VectorQuantizer2(
+        n_e=n_e,
+        e_dim=e_dim,
+        beta=beta,
+        remap=remap,
+        dims=dims,
+        use_ema=use_ema,
+        ema_decay=ema_decay,
+        ema_eps=ema_eps
+    )
+    return VQModel(encoder, decoder, quantizer, **kwargs)
+
+
+@register_model(f"discrete.vq.f16d8")
+def VQ_f16d8(
+        # --- encoder/decoder config ---
+        img_size=256,
+        dims=2,
+        double_z=False,
+        z_channels=8,
+        in_channels=3,
+        out_ch=3,
+        ch=128,
+        ch_mult=[1, 1, 2, 2, 4],
+        num_res_blocks=2,
+        attn_resolutions=[16],
+        dropout=0.0,
+        # --- quantizer config ---
+        n_e=16384,
+        e_dim=8,
+        beta=0.25,
+        remap=None,
+        use_ema=False,
+        ema_decay=0.99,
+        ema_eps=1e-5,
+        **kwargs
+    ):
+    """
+    Instantiate a VQModel (f16 config) with flexible, efficient parameter override.
+    https://github.com/CompVis/latent-diffusion/blob/main/models/first_stage_models/vq-f16/config.yaml
+    """
+    encoder = Encoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    decoder = Decoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    quantizer = VectorQuantizer2(
+        n_e=n_e,
+        e_dim=e_dim,
+        beta=beta,
+        remap=remap,
+        use_ema=use_ema,
+        ema_decay=ema_decay,
+        ema_eps=ema_eps
+    )
+    return VQModel(encoder, decoder, quantizer, **kwargs)
+
+@register_model(f"discrete.msrq.f16d32",
+code_url="https://github.com/FoundationVision/VAR/blob/main/models/quant.py",
+paper_url="https://arxiv.org/pdf/2404.02905",)
+def MSRQModel_f8(
+        # --- encoder/decoder config ---
+        img_size=256,
+        dims=2,
+        double_z=False,
+        z_channels=32,
+        in_channels=3,
+        out_ch=3,
+        ch=160,
+        ch_mult=[1, 1, 2, 2, 4],
+        num_res_blocks=2,
+        attn_resolutions=[32],
+        dropout=0.0,
+        # --- quantizer config ---
+        n_e=4096,
+        e_dim=32,
+        beta=0.25,
+        use_ema=False,
+        ema_decay=0.99,
+        ema_eps=1e-5,
+        v_patch_nums=(1, 2, 3, 4, 5, 6, 8, 10, 13, 16),
+        quant_resi=0.5,
+        share_quant_resi=4,
+        using_znorm=False,
+        **kwargs
+    ):
+    """
+    Instantiate a MSRQModel (EMA, f8 config) with flexible, efficient parameter override.
+    """
+    encoder = Encoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    decoder = Decoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    quantizer = MultiScaleResidualQuantizer(
+        n_e=n_e,
+        e_dim=e_dim,
+        beta=beta,
+        v_patch_nums=v_patch_nums,
+        quant_resi=quant_resi,
+        share_quant_resi=share_quant_resi,
+        using_znorm=using_znorm,
+        dims=dims,
+        use_ema=use_ema,
+        ema_decay=ema_decay,
+        ema_eps=ema_eps
+    )
+    return VQModel(encoder, decoder, quantizer, **kwargs)
+
+# @register_model(f"discrete.vit_xsmall")
+# def ViTVQModel_XSmall(
+#         # --- encoder/decoder (ViT) config ---
+#         image_size: int,
+#         patch_size=None,
+#         z_channels=256,
+#         dim=256,
+#         depth=4,
+#         num_heads=4,
+#         mlp_ratio=4,
+#         channels=3,
+#         # --- quantizer config ---
+#         n_e=8192,
+#         e_dim=32,
+#         beta=0.25,
+#         remap=None,
+#         **kwargs
+#     ):
+#     encoder = EncoderVisionTransformer(
+#         image_size=image_size,
+#         patch_size=8 if patch_size is None else patch_size,
+#         z_channels=z_channels,
+#         dim=dim,
+#         depth=depth,
+#         num_heads=num_heads,
+#         mlp_ratio=mlp_ratio,
+#         channels=channels
+#     )
+#     decoder = DecoderVisionTransformer(
+#         image_size=image_size,
+#         patch_size=8 if patch_size is None else patch_size,
+#         z_channels=z_channels,
+#         dim=dim,
+#         depth=depth,
+#         num_heads=num_heads,
+#         mlp_ratio=mlp_ratio,
+#         channels=channels
+#     )
+#     quantizer = ViTVectorQuantizer(n_e=n_e, e_dim=e_dim, beta=beta, remap=remap)
+#     return VQModel(encoder, decoder, quantizer, vit=True, **kwargs)
+
+# @register_model(f"{_REGISTRY_PREFIX}vit_small")
+# def ViTVQModel_Small(
+#         # --- encoder/decoder (ViT) config ---
+#         image_size: int,
+#         patch_size=None,
+#         z_channels=512,
+#         dim=512,
+#         depth=8,
+#         num_heads=8,
+#         mlp_ratio=4,
+#         channels=3,
+#         # --- quantizer config ---
+#         n_e=8192,
+#         e_dim=32,
+#         beta=0.25,
+#         remap=None,
+#         **kwargs
+#     ):
+#     encoder = EncoderVisionTransformer(
+#         image_size=image_size,
+#         patch_size=8 if patch_size is None else patch_size,
+#         z_channels=z_channels,
+#         dim=dim,
+#         depth=depth,
+#         num_heads=num_heads,
+#         mlp_ratio=mlp_ratio,
+#         channels=channels
+#     )
+#     decoder = DecoderVisionTransformer(
+#         image_size=image_size,
+#         patch_size=8 if patch_size is None else patch_size,
+#         z_channels=z_channels,
+#         dim=dim,
+#         depth=depth,
+#         num_heads=num_heads,
+#         mlp_ratio=mlp_ratio,
+#         channels=channels
+#     )
+#     quantizer = ViTVectorQuantizer(n_e=n_e, e_dim=e_dim, beta=beta, remap=remap)
+#     return VQModel(encoder, decoder, quantizer, vit=True, **kwargs)
+
+# @register_model(f"{_REGISTRY_PREFIX}vit_base")
+# def ViTVQModel_Base(
+#         # --- encoder/decoder (ViT) config ---
+#         image_size: int,
+#         patch_size=None,
+#         z_channels=768,
+#         dim=768,
+#         depth=12,
+#         num_heads=12,
+#         mlp_ratio=4,
+#         channels=3,
+#         # --- quantizer config ---
+#         n_e=8192,
+#         e_dim=32,
+#         beta=0.25,
+#         remap=None,
+#         **kwargs
+#     ):
+#     encoder = EncoderVisionTransformer(
+#         image_size=image_size,
+#         patch_size=8 if patch_size is None else patch_size,
+#         z_channels=z_channels,
+#         dim=dim,
+#         depth=depth,
+#         num_heads=num_heads,
+#         mlp_ratio=mlp_ratio,
+#         channels=channels
+#     )
+#     decoder = DecoderVisionTransformer(
+#         image_size=image_size,
+#         patch_size=8 if patch_size is None else patch_size,
+#         z_channels=z_channels,
+#         dim=dim,
+#         depth=depth,
+#         num_heads=num_heads,
+#         mlp_ratio=mlp_ratio,
+#         channels=channels
+#     )
+#     quantizer = ViTVectorQuantizer(n_e=n_e, e_dim=e_dim, beta=beta, remap=remap)
+#     return VQModel(encoder, decoder, quantizer, vit=True, **kwargs)
+
+# @register_model(f"{_REGISTRY_PREFIX}vit_large")
+# def ViTVQModel_Large(
+#         # --- encoder/decoder (ViT) config ---
+#         image_size: int,
+#         patch_size=None,
+#         z_channels=1280,
+#         dim=1280,
+#         depth=32,
+#         num_heads=16,
+#         mlp_ratio=4,
+#         channels=3,
+#         # --- quantizer config ---
+#         n_e=8192,
+#         e_dim=32,
+#         beta=0.25,
+#         remap=None,
+#         **kwargs
+#     ):
+#     encoder = EncoderVisionTransformer(
+#         image_size=image_size,
+#         patch_size=8 if patch_size is None else patch_size,
+#         z_channels=z_channels,
+#         dim=dim,
+#         depth=depth,
+#         num_heads=num_heads,
+#         mlp_ratio=mlp_ratio,
+#         channels=channels
+#     )
+#     decoder = DecoderVisionTransformer(
+#         image_size=image_size,
+#         patch_size=8 if patch_size is None else patch_size,
+#         z_channels=z_channels,
+#         dim=dim,
+#         depth=depth,
+#         num_heads=num_heads,
+#         mlp_ratio=mlp_ratio,
+#         channels=channels
+#     )
+#     quantizer = ViTVectorQuantizer(n_e=n_e, e_dim=e_dim, beta=beta, remap=remap)
+#     return VQModel(encoder, decoder, quantizer, vit=True, **kwargs)
+
+@register_model(f"{_REGISTRY_PREFIX}lfq_f4d3b10")
+def LFQModel_f4(
+        # --- encoder/decoder config ---
+        img_size=256,
+        dims=2,
+        double_z=False,
+        z_channels=3,
+        in_channels=3,
+        out_ch=3,
+        ch=128,
+        ch_mult=[1, 2, 4],
+        num_res_blocks=2,
+        attn_resolutions=[],
+        dropout=0.0,
+        # --- quantizer config ---
+        token_bits=10,
+        beta=0.25,
+        **kwargs
+    ):
+    encoder = Encoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    decoder = Decoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    quantizer = LookupFreeQuantizer(
+        token_bits=token_bits,
+        beta=beta,
+        commitment_cost=commitment_cost,
+        entropy_loss_weight=entropy_loss_weight,
+        entropy_loss_temperature=entropy_loss_temperature,
+        entropy_gamma=entropy_gamma,
+    )
+    return VQModel(encoder, decoder, quantizer, **kwargs)
+
