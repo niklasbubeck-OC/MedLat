@@ -76,8 +76,8 @@ def VQ_f8_d4_e16384(
         dims=2,
         double_z=False,
         z_channels=4,
-        in_channels=1,
-        out_ch=1,
+        in_channels=3,
+        out_ch=3,
         ch=128,
         ch_mult=[1, 2, 2, 4],
         num_res_blocks=2,
@@ -87,7 +87,6 @@ def VQ_f8_d4_e16384(
         n_e=16384,
         e_dim=4,
         beta=0.25,
-        remap=None,
         use_ema=False,
         ema_decay=0.99,
         ema_eps=1e-5,
@@ -127,8 +126,6 @@ def VQ_f8_d4_e16384(
         n_e=n_e,
         e_dim=e_dim,
         beta=beta,
-        remap=remap,
-        dims=dims,
         use_ema=use_ema,
         ema_decay=ema_decay,
         ema_eps=ema_eps
@@ -154,7 +151,6 @@ def VQ_f16_d8_e16384(
         n_e=16384,
         e_dim=8,
         beta=0.25,
-        remap=None,
         use_ema=False,
         ema_decay=0.99,
         ema_eps=1e-5,
@@ -194,7 +190,6 @@ def VQ_f16_d8_e16384(
         n_e=n_e,
         e_dim=e_dim,
         beta=beta,
-        remap=remap,
         use_ema=use_ema,
         ema_decay=ema_decay,
         ema_eps=ema_eps
@@ -351,7 +346,6 @@ def LFQ_f4_d3_b4(
     dropout=0.0,
 
     token_bits=4,   # 3 × 4 = 12 bits ≈ 13-bit VQ
-    beta=0.25,
     commitment_cost=0.25,
     entropy_loss_weight=0.2,
     entropy_loss_temperature=0.01,
@@ -386,7 +380,6 @@ def LFQ_f4_d3_b4(
     )
     quantizer = LookupFreeQuantizer(
         token_bits=token_bits,
-        beta=beta,
         commitment_cost=commitment_cost,
         entropy_loss_weight=entropy_loss_weight,
         entropy_loss_temperature=entropy_loss_temperature,
@@ -400,8 +393,8 @@ def LFQ_f8_d4_b4(
     dims=2,
     double_z=False,
     z_channels=4,
-    in_channels=1,
-    out_ch=1,
+    in_channels=3,
+    out_ch=3,
     ch=128,
     ch_mult=[1, 2, 2, 4],
     num_res_blocks=2,
@@ -409,7 +402,6 @@ def LFQ_f8_d4_b4(
     dropout=0.0,
 
     token_bits=4,   # 4 × 4 = 16 bits ≈ 14 VQ
-    beta=0.25,
     commitment_cost=0.25,
     entropy_loss_weight=0.2,
     entropy_loss_temperature=0.01,
@@ -444,7 +436,6 @@ def LFQ_f8_d4_b4(
     )
     quantizer = LookupFreeQuantizer(
         token_bits=token_bits,
-        beta=beta,
         commitment_cost=commitment_cost,
         entropy_loss_weight=entropy_loss_weight,
         entropy_loss_temperature=entropy_loss_temperature,
@@ -467,7 +458,6 @@ def LFQ_f16_d8_b2(
     dropout=0.0,
 
     token_bits=2,   # 8 × 2 = 16 bits ≈ 14 VQ
-    beta=0.25,
     commitment_cost=0.25,
     entropy_loss_weight=0.2,
     entropy_loss_temperature=0.01,
@@ -502,7 +492,6 @@ def LFQ_f16_d8_b2(
     )
     quantizer = LookupFreeQuantizer(
         token_bits=token_bits,
-        beta=beta,
         commitment_cost=commitment_cost,
         entropy_loss_weight=entropy_loss_weight,
         entropy_loss_temperature=entropy_loss_temperature,
@@ -526,7 +515,6 @@ def LFQ_f16_d10_b10(
         dropout=0.0,
         # --- quantizer config ---
         token_bits=10,
-        beta=0.25,
         commitment_cost=0.25,
         entropy_loss_weight=0.2,
         entropy_loss_temperature=0.01,
@@ -561,7 +549,6 @@ def LFQ_f16_d10_b10(
     )
     quantizer = LookupFreeQuantizer(
         token_bits=token_bits,
-        beta=beta,
         commitment_cost=commitment_cost,
         entropy_loss_weight=entropy_loss_weight,
         entropy_loss_temperature=entropy_loss_temperature,
@@ -585,7 +572,6 @@ def LFQ_f16_d12_b12(
         dropout=0.0,
         # --- quantizer config ---
         token_bits=12,
-        beta=0.25,
         commitment_cost=0.25,
         entropy_loss_weight=0.2,
         entropy_loss_temperature=0.01,
@@ -620,7 +606,6 @@ def LFQ_f16_d12_b12(
     )
     quantizer = LookupFreeQuantizer(
         token_bits=token_bits,
-        beta=beta,
         commitment_cost=commitment_cost,
         entropy_loss_weight=entropy_loss_weight,
         entropy_loss_temperature=entropy_loss_temperature,
@@ -644,7 +629,6 @@ def LFQ_f16_d14_b14(
         dropout=0.0,
         # --- quantizer config ---
         token_bits=14,
-        beta=0.25,
         commitment_cost=0.25,
         entropy_loss_weight=0.2,
         entropy_loss_temperature=0.01,
@@ -679,7 +663,6 @@ def LFQ_f16_d14_b14(
     )
     quantizer = LookupFreeQuantizer(
         token_bits=token_bits,
-        beta=beta,
         commitment_cost=commitment_cost,
         entropy_loss_weight=entropy_loss_weight,
         entropy_loss_temperature=entropy_loss_temperature,
@@ -703,7 +686,6 @@ def LFQ_f16_d16_b16(
         dropout=0.0,
         # --- quantizer config ---
         token_bits=16,
-        beta=0.25,
         commitment_cost=0.25,
         entropy_loss_weight=0.2,
         entropy_loss_temperature=0.01,
@@ -738,7 +720,6 @@ def LFQ_f16_d16_b16(
     )
     quantizer = LookupFreeQuantizer(
         token_bits=token_bits,
-        beta=beta,
         commitment_cost=commitment_cost,
         entropy_loss_weight=entropy_loss_weight,
         entropy_loss_temperature=entropy_loss_temperature,
@@ -762,7 +743,6 @@ def LFQ_f16_d18_b18(
         dropout=0.0,
         # --- quantizer config ---
         token_bits=18,
-        beta=0.25,
         commitment_cost=0.25,
         entropy_loss_weight=0.2,
         entropy_loss_temperature=0.01,
@@ -797,7 +777,6 @@ def LFQ_f16_d18_b18(
     )
     quantizer = LookupFreeQuantizer(
         token_bits=token_bits,
-        beta=beta,
         commitment_cost=commitment_cost,
         entropy_loss_weight=entropy_loss_weight,
         entropy_loss_temperature=entropy_loss_temperature,
@@ -806,8 +785,8 @@ def LFQ_f16_d18_b18(
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
 
-@register_model("discrete.qinco.f4_d3_e8192")
-def QINCo_f4_d3_e8192(
+@register_model("discrete.simple_qinco.f4_d3_e8192")
+def SimpleQINCo_f4_d3_e8192(
         # --- encoder/decoder config ---
         img_size=256,
         dims=2,
@@ -855,7 +834,7 @@ def QINCo_f4_d3_e8192(
         attn_resolutions=attn_resolutions,
         dropout=dropout
     )
-    quantizer = QINCoVectorQuantizer2(
+    quantizer = SimpleQINCo(
         n_e=n_e,
         e_dim=e_dim,
         beta=beta,
@@ -865,15 +844,15 @@ def QINCo_f4_d3_e8192(
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
 
-@register_model(f"discrete.qinco.f8_d4_e16384")
-def QINCo_f8_d4_e16384(
+@register_model(f"discrete.simple_qinco.f8_d4_e16384")
+def SimpleQINCo_f8_d4_e16384(
         # --- encoder/decoder config ---
         img_size=256,
         dims=2,
         double_z=False,
         z_channels=4,
-        in_channels=1,
-        out_ch=1,
+        in_channels=3,
+        out_ch=3,
         ch=128,
         ch_mult=[1, 2, 2, 4],
         num_res_blocks=2,
@@ -914,7 +893,7 @@ def QINCo_f8_d4_e16384(
         attn_resolutions=attn_resolutions,
         dropout=dropout
     )
-    quantizer = QINCoVectorQuantizer2(
+    quantizer = SimpleQINCo(
         n_e=n_e,
         e_dim=e_dim,
         beta=beta,
@@ -924,8 +903,8 @@ def QINCo_f8_d4_e16384(
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
 
-@register_model(f"discrete.qinco.f16_d8_e16384")
-def QINCo_f16_d8_e16384(
+@register_model(f"discrete.simple_qinco.f16_d8_e16384")
+def SimpleQINCo_f16_d8_e16384(
         # --- encoder/decoder config ---
         img_size=256,
         dims=2,
@@ -973,7 +952,7 @@ def QINCo_f16_d8_e16384(
         attn_resolutions=attn_resolutions,
         dropout=dropout
     )
-    quantizer = QINCoVectorQuantizer2(
+    quantizer = SimpleQINCo(
         n_e=n_e,
         e_dim=e_dim,
         beta=beta,
@@ -1051,8 +1030,8 @@ def SimVQ_f8_d4_e16384(
         dims=2,
         double_z=False,
         z_channels=4,
-        in_channels=1,
-        out_ch=1,
+        in_channels=3,
+        out_ch=3,
         ch=128,
         ch_mult=[1, 2, 2, 4],
         num_res_blocks=2,
@@ -1226,8 +1205,8 @@ def FSQ_f8_d4_l16384(
         dims=2,
         double_z=False,
         z_channels=4,
-        in_channels=1,
-        out_ch=1,
+        in_channels=3,
+        out_ch=3,
         ch=128,
         ch_mult=[1, 2, 2, 4],
         num_res_blocks=2,

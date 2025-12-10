@@ -17,6 +17,8 @@ except ImportError:
     create_model = None
 
 
+
+
 class HOGGenerator(nn.Module):
     """Generate HOG feature for images.
 
@@ -414,3 +416,162 @@ class ClipAlignment(AlignmentModule):
             dec = self.decoder(x, interpolate_zq=None, H=None, W=None, D=None)
         dec = self.to_pixel(dec)
         return dec
+
+
+########################################################################
+# Vision-Foundation alignment module (VA-VAE style)
+########################################################################
+
+
+class FoundationFeatureExtractor(nn.Module):
+    """
+    Lightweight wrapper to fetch frozen vision-foundation features.
+
+    Supports MAE and DINOv2-L. Produces spatial feature maps shaped (B, C, H', W').
+    """
+
+    def __init__(self, model_type: str):
+        super().__init__()
+        if not TIMM_AVAILABLE:
+            raise RuntimeError("timm is required for FoundationFeatureExtractor.")
+
+        self.model_type = model_type.lower()
+        if self.model_type == "mae":
+            model_name = "hf-hub:timm/vit_large_patch16_224.mae"
+            self.model = create_model(model_name, pretrained=True, dynamic_img_size=True)
+        elif self.model_type == "dinov2":
+            model_name = "hf-hub:timm/vit_large_patch14_dinov2.lvd142m"
+            self.model = create_model(model_name, pretrained=True, dynamic_img_size=True)
+        else:
+            raise ValueError(f"Unsupported foundation model type: {model_type}")
+
+        self.model.requires_grad_(False)
+        self.model.eval()
+        # Common channel dim for both MAE/DINOv2-L
+        self.feature_dim = 1024
+
+    @torch.no_grad()
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        b, c, h, w = x.shape
+        if self.model_type == "dinov2":
+            # DINOv2 expects 224x224 crops; resize then reshape tokens back to spatial grid.
+            x_resized = nn.functional.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
+            tokens = self.model.forward_features(x_resized)[:, 1:]
+            # DINOv2 with patch_size=14 on 224x224 gives 16x16 patches
+            feat_h = 224 // 14  # = 16
+            feat_w = 224 // 14  # = 16
+            return tokens.reshape(b, feat_h, feat_w, -1).permute(0, 3, 1, 2)
+
+        # MAE supports dynamic image size; reshape patch tokens (drop cls).
+        tokens = self.model.forward_features(x)[:, 1:]
+        feat_h = h // 16
+        feat_w = w // 16
+        return tokens.reshape(b, feat_h, feat_w, -1).permute(0, 3, 1, 2)
+
+
+
+class VFFoundationAlignment(AlignmentModule):
+    """
+    Align latent feature maps from the autoencoder with frozen vision foundation
+    model features using a two-part VF loss:
+      - vf_loss_1: similarity-matrix distance with margin
+      - vf_loss_2: per-location cosine margin
+    """
+
+    def __init__(
+        self,
+        latent_channels: int,
+        foundation_type: str = "dinov2",
+        reverse_proj: bool = True,
+        distmat_margin: float = 0.25,
+        cos_margin: float = 0.5,
+        distmat_weight: float = 1.0,
+        cos_weight: float = 1.0,
+    ):
+        super().__init__('vf')
+        self.foundation_model = FoundationFeatureExtractor(foundation_type)
+        self.reverse_proj = reverse_proj
+        self.distmat_margin = distmat_margin
+        self.cos_margin = cos_margin
+        self.distmat_weight = distmat_weight
+        self.cos_weight = cos_weight
+
+        aux_dim = self.foundation_model.feature_dim
+        if reverse_proj:
+            # Map latent -> foundation space
+            self.linear_proj = nn.Conv2d(latent_channels, aux_dim, kernel_size=1)
+        else:
+            # Map foundation -> latent space
+            self.linear_proj = nn.Conv2d(aux_dim, latent_channels, kernel_size=1)
+
+    def _ensure_4d(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 4:
+            return x
+        if x.dim() == 3:
+            b, l, c = x.shape
+            side = int(math.sqrt(l))
+            if side * side != l:
+                raise ValueError("Latent tokens length is not a perfect square; provide 4D feature maps.")
+            return x.transpose(1, 2).reshape(b, c, side, side)
+        raise ValueError("Expected latent as (B,C,H,W) or (B,L,C)")
+
+    def _match_spatial(self, a: torch.Tensor, b: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Resize tensors so they share spatial resolution (H, W).
+        """
+        if a.shape[-2:] == b.shape[-2:]:
+            return a, b
+        return (
+            nn.functional.interpolate(a, size=b.shape[-2:], mode='bilinear', align_corners=False),
+            b,
+        )
+
+    def compute_target(self, x: torch.Tensor) -> torch.Tensor:
+        return self.foundation_model(x)
+
+    def decode_projection(self, quant: torch.Tensor) -> torch.Tensor:
+        # For VF alignment, quant is treated as latent feature map (B,C,H,W) or (B,L,C).
+        return self._ensure_4d(quant)
+
+    def forward(  # type: ignore[override]
+        self,
+        quant: torch.Tensor,
+        input_image: Optional[torch.Tensor] = None,
+        mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if input_image is None:
+            raise ValueError("VFFoundationAlignment requires input_image to compute target features.")
+
+        z = self.decode_projection(quant)  # (B, C, H, W)
+        aux_feature = self.compute_target(input_image)  # (B, C_aux, H', W')
+
+        # Project to shared channel space
+        if self.reverse_proj:
+            z_proj = self.linear_proj(z)
+            aux_proj = aux_feature
+        else:
+            aux_proj = self.linear_proj(aux_feature)
+            z_proj = z
+
+        # Match spatial shapes
+        aux_proj, z_proj = self._match_spatial(aux_proj, z_proj)
+
+        # Compute VF losses
+        b, c, h, w = z_proj.shape
+        z_flat = z_proj.view(b, c, -1)
+        aux_flat = aux_proj.view(b, aux_proj.shape[1], -1)
+
+        z_norm = torch.nn.functional.normalize(z_flat, dim=1)
+        aux_norm = torch.nn.functional.normalize(aux_flat, dim=1)
+
+        z_cos_sim = torch.einsum('bci,bcj->bij', z_norm, z_norm)
+        aux_cos_sim = torch.einsum('bci,bcj->bij', aux_norm, aux_norm)
+        diff = torch.abs(z_cos_sim - aux_cos_sim)
+
+        vf_loss_1 = torch.nn.functional.relu(diff - self.distmat_margin).mean()
+        vf_loss_2 = torch.nn.functional.relu(
+            1 - self.cos_margin - torch.nn.functional.cosine_similarity(aux_proj, z_proj, dim=1)
+        ).mean()
+
+        vf_loss = vf_loss_1 * self.distmat_weight + vf_loss_2 * self.cos_weight
+        return vf_loss, z_proj

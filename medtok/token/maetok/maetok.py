@@ -6,7 +6,7 @@ from .modules import MAETokViTEncoder, MAETokViTDecoder
 from medtok.modules.alignments import HOGAlignment, DinoAlignment, ClipAlignment
 from medtok.registry import register_model
 
-__all__ = ['MAETok_B_128', 'MaskAEModel']
+__all__ = ['MaskAEModel']
 
 class Normalize(nn.Module):
     def __init__(self, mean, std, device=None):
@@ -353,7 +353,3 @@ class MaskAEModel(nn.Module):
             elif isinstance(self.decoder.to_pixel.proj, (nn.Conv2d, nn.Conv3d)):
                 return self.decoder.to_pixel.proj
         return None
-
-@register_model("token.maetok.b_128")
-def MAETok_B_128(image_size: int = 256, base_image_size: int = 256, num_latent_tokens: int = 128, **kwargs):
-    return MaskAEModel(image_size=image_size, base_image_size=base_image_size, num_latent_tokens=num_latent_tokens, **kwargs)

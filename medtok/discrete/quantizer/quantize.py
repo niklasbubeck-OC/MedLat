@@ -13,7 +13,7 @@ from torch.amp import autocast
 from medtok.registry import register_model
 
 
-__all__ = ["VectorQuantizer", "GumbelQuantize", "QINCoVectorQuantizer2", "VectorQuantizer2", "SimVQ", "ResidualQuantizer", "GroupedVQ", "MultiScaleResidualQuantizer", "LookupFreeQuantizer", "FiniteScalarQuantizer"]
+__all__ = ["VectorQuantizer", "GumbelQuantize", "SimpleQINCo", "VectorQuantizer2", "SimVQ", "ResidualQuantizer", "GroupedVQ", "MultiScaleResidualQuantizer", "LookupFreeQuantizer", "FiniteScalarQuantizer"]
 
 _REGISTRY_PREFIX = "discrete.quantizer."
 
@@ -362,11 +362,12 @@ class VectorQuantizer2(nn.Module):
             z_q = z_q.view(shape)
         return self.norm(z_q)
 
-@register_model(f"{_REGISTRY_PREFIX}qinco_vector_quantizer",
+@register_model(f"{_REGISTRY_PREFIX}simple_qinco",
 code_url="https://github.com/facebookresearch/Qinco",
 paper_url="https://arxiv.org/abs/2401.14732",
 )
-class QINCoVectorQuantizer2(VectorQuantizer2):
+
+class SimpleQINCo(VectorQuantizer2):
     def __init__(self, n_e, e_dim, beta=0.25,
                  hidden_dim=256, num_layers=3,
                  **kwargs):
@@ -380,6 +381,8 @@ class QINCoVectorQuantizer2(VectorQuantizer2):
             hidden_dim=hidden_dim,
             num_layers=num_layers
         )
+
+
 
 class SimVQ(nn.Module):
     """

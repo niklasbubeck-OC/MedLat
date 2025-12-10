@@ -2,6 +2,7 @@ from medtok.continuous.modules.ldm_modules import Encoder as LDMEncoder, Decoder
 from medtok.continuous.modules.maisi_modules import MaisiEncoder, MaisiDecoder
 from medtok.registry import register_model
 from medtok.continuous.vae_models import AutoencoderKL
+from medtok.modules.alignments import VFFoundationAlignment
 
 
 @register_model(f"continuous.aekl.f4_d3", 
@@ -181,3 +182,136 @@ def Maisi_f4_d4(
         )
 
     return AutoencoderKL(encoder=encoder, decoder=decoder, **kwargs)
+
+@register_model(f"continuous.vavae.f16_d16_mae",
+                code_url="https://github.com/hustvl/LightningDiT/tree/2725fed42a14898744433809949834e26957bcdd",
+                paper_url="https://arxiv.org/pdf/2501.01423",)
+def VAVAE_f16_d16_mae(
+    img_size=256,
+    dims=2,
+    ## Encoder decoder config
+    double_z=True,
+    z_channels=16,
+    in_channels=3,
+    out_ch=3,
+    ch=128,
+    ch_mult=[1, 1, 2, 2, 4],
+    num_res_blocks=2,
+    attn_resolutions=[16],
+    dropout=0.0,
+    **kwargs):
+    """
+    VAVAE with compression factor 16
+    Args:
+        dims (int): Number of dimensions (2 for 2D, 3 for 3D)
+    """
+    encoder = LDMEncoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
+    decoder = LDMDecoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
+
+    alignment = VFFoundationAlignment(latent_channels=z_channels, foundation_type="mae")
+    return AutoencoderKL(encoder=encoder, decoder=decoder, alignment=alignment, **kwargs)
+
+@register_model(f"continuous.vavae.f16_d32_mae",
+                code_url="https://github.com/hustvl/LightningDiT/tree/2725fed42a14898744433809949834e26957bcdd",
+                paper_url="https://arxiv.org/pdf/2501.01423",)
+def VAVAE_f16_d32_mae(
+    img_size=256,
+    dims=2,
+    ## Encoder decoder config
+    double_z=True,
+    z_channels=32,
+    in_channels=3,
+    out_ch=3,
+    ch=128,
+    ch_mult=[1, 1, 2, 2, 4],
+    num_res_blocks=2,
+    attn_resolutions=[16],
+    dropout=0.0,
+    **kwargs):
+    return VAVAE_f16_d16_mae(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout, **kwargs)
+
+@register_model(f"continuous.vavae.f16_d64_mae",
+                code_url="https://github.com/hustvl/LightningDiT/tree/2725fed42a14898744433809949834e26957bcdd",
+                paper_url="https://arxiv.org/pdf/2501.01423",)
+def VAVAE_f16_d64_mae(
+    img_size=256,
+    dims=2,
+    ## Encoder decoder config
+    double_z=True,
+    z_channels=64,
+    in_channels=3,
+    out_ch=3,
+    ch=128,
+    ch_mult=[1, 1, 2, 2, 4],
+    num_res_blocks=2,
+    attn_resolutions=[16],
+    dropout=0.0,
+    **kwargs):
+    return VAVAE_f16_d16_mae(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout, **kwargs)
+
+@register_model(f"continuous.vavae.f16_d16_dinov2",
+                code_url="https://github.com/hustvl/LightningDiT/tree/2725fed42a14898744433809949834e26957bcdd",
+                paper_url="https://arxiv.org/pdf/2501.01423",)
+def VAVAE_f16_d16_dinov2(
+    img_size=256,
+    dims=2,
+    ## Encoder decoder config
+    double_z=True,
+    z_channels=16,
+    in_channels=3,
+    out_ch=3,
+    ch=128,
+    ch_mult=[1, 1, 2, 2, 4],
+    num_res_blocks=2,
+    attn_resolutions=[16],
+    dropout=0.0,
+    **kwargs):
+    """
+    VAVAE with compression factor 16
+    Args:
+        dims (int): Number of dimensions (2 for 2D, 3 for 3D)
+    """
+    encoder = LDMEncoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
+    decoder = LDMDecoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
+
+    alignment = VFFoundationAlignment(latent_channels=z_channels, foundation_type="dinov2")
+    return AutoencoderKL(encoder=encoder, decoder=decoder, alignment=alignment, **kwargs)
+
+@register_model(f"continuous.vavae.f16_d32_dinov2",
+                code_url="https://github.com/hustvl/LightningDiT/tree/2725fed42a14898744433809949834e26957bcdd",
+                paper_url="https://arxiv.org/pdf/2501.01423",)
+def VAVAE_f16_d32_dinov2(
+    img_size=256,
+    dims=2,
+    ## Encoder decoder config
+    double_z=True,
+    z_channels=32,
+    in_channels=3,
+    out_ch=3,
+    ch=128,
+    ch_mult=[1, 1, 2, 2, 4],
+    num_res_blocks=2,
+    attn_resolutions=[16],
+    dropout=0.0,
+    **kwargs):
+    return VAVAE_f16_d16_dinov2(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout, **kwargs)
+
+@register_model(f"continuous.vavae.f16_d64_dinov2",
+                code_url="https://github.com/hustvl/LightningDiT/tree/2725fed42a14898744433809949834e26957bcdd",
+                paper_url="https://arxiv.org/pdf/2501.01423",)
+def VAVAE_f16_d64_dinov2(
+    img_size=256,
+    dims=2,
+    ## Encoder decoder config
+    double_z=True,
+    z_channels=64,
+    in_channels=3,
+    out_ch=3,
+    ch=128,
+    
+    ch_mult=[1, 1, 2, 2, 4],
+    num_res_blocks=2,
+    attn_resolutions=[16],
+    dropout=0.0,
+    **kwargs):
+    return VAVAE_f16_d16_dinov2(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout, **kwargs)

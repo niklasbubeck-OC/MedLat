@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from ..utils import init_from_ckpt
+from medtok.utils import init_from_ckpt
+from medtok.modules.alignments import AlignmentModule
 from medtok.continuous.modules.ldm_modules import get_conv_layer
 from medtok.modules.gaussian_dist import DiagonalGaussianDistribution
 
@@ -14,6 +15,7 @@ class AutoencoderKL(nn.Module):
     def __init__(self,
                  encoder: nn.Module,
                  decoder: nn.Module,
+                 alignment: AlignmentModule = None,
                  embed_dim: int = None,
                  kl_weight: float = 1e-6,
                  ckpt_path: str = None):
@@ -23,6 +25,8 @@ class AutoencoderKL(nn.Module):
 
         self.encoder = encoder
         self.decoder = decoder
+        self.alignment = alignment
+        
         self.encoder_z_channels = getattr(encoder, "z_channels", None)
         if self.encoder_z_channels is None:
             raise ValueError(f"Encoder {encoder.__class__.__name__} must define z_channels.")
@@ -64,11 +68,17 @@ class AutoencoderKL(nn.Module):
 
     def forward(self, input, sample_posterior=True):
         posterior = self.encode(input)
+        p_loss = self.p_loss(posterior, input.device)
         if sample_posterior:
             z = posterior.sample()
         else:
             z = posterior.mode()
         dec = self.decode(z)
-        return dec, self.p_loss(posterior, input.device)
+        
+        if self.alignment is not None:
+            alignment_loss, _ = self.alignment(z, input)
+            return dec, p_loss + alignment_loss
+        
+        return dec, p_loss
 
 
