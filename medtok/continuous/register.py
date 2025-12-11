@@ -2,7 +2,7 @@ from medtok.continuous.modules.ldm_modules import Encoder as LDMEncoder, Decoder
 from medtok.continuous.modules.maisi_modules import MaisiEncoder, MaisiDecoder
 from medtok.registry import register_model
 from medtok.continuous.vae_models import AutoencoderKL
-from medtok.modules.alignments import VFFoundationAlignment
+from medtok.modules.alignments import *
 
 
 @register_model(f"continuous.aekl.f4_d3", 
@@ -31,6 +31,18 @@ def AEKL_f4_d3(
     decoder = LDMDecoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
     return AutoencoderKL(encoder=encoder, decoder=decoder, **kwargs)
 
+@register_model(f"continuous.aekl.f4_d8")
+def AEKL_f4_d8(**kwargs):
+    return AEKL_f4_d3(z_channels=8, **kwargs)
+
+@register_model(f"continuous.aekl.f4_d16")
+def AEKL_f4_d16(**kwargs):
+    return AEKL_f4_d3(z_channels=16, **kwargs)
+
+@register_model(f"continuous.aekl.f4_d32")
+def AEKL_f4_d32(**kwargs):
+    return AEKL_f4_d3(z_channels=32, **kwargs)
+
 @register_model(f"continuous.aekl.f8_d4", 
 code_url="https://github.com/CompVis/latent-diffusion/blob/main/models/first_stage_models/kl-f8/config.yaml", 
 paper_url="https://arxiv.org/pdf/2112.10752",)
@@ -58,6 +70,19 @@ def AEKL_f8_d4(
     decoder = LDMDecoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
     return AutoencoderKL(encoder=encoder, decoder=decoder, **kwargs)
 
+
+@register_model(f"continuous.aekl.f8_d8")
+def AEKL_f8_d8(**kwargs):
+    return AEKL_f8_d4(z_channels=8, **kwargs)
+
+@register_model(f"continuous.aekl.f8_d16")
+def AEKL_f8_d16(**kwargs):
+    return AEKL_f8_d4(z_channels=16, **kwargs)
+
+@register_model(f"continuous.aekl.f8_d32")
+def AEKL_f8_d32(**kwargs):
+    return AEKL_f8_d4(z_channels=32, **kwargs)
+
 @register_model(f"continuous.aekl.f16_d8", 
 code_url="https://github.com/CompVis/latent-diffusion/blob/main/configs/autoencoder/autoencoder_kl_16x16x16.yaml", 
 paper_url="https://arxiv.org/pdf/2112.10752",
@@ -84,6 +109,18 @@ def AEKL_f16_d8(
     encoder = LDMEncoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
     decoder = LDMDecoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
     return AutoencoderKL(encoder=encoder, decoder=decoder, **kwargs)
+
+@register_model(f"continuous.aekl.f16_d16")
+def AEKL_f16_d16(**kwargs):
+    return AEKL_f16_d8(z_channels=16, **kwargs)
+
+@register_model(f"continuous.aekl.f16_d32")
+def AEKL_f16_d32(**kwargs):
+    return AEKL_f16_d8(z_channels=32, **kwargs)
+
+@register_model(f"continuous.aekl.f16_d64")
+def AEKL_f16_d64(**kwargs):
+    return AEKL_f16_d8(z_channels=64, **kwargs)
 
 @register_model(f"continuous.aekl.f32_d64", 
 code_url="https://github.com/CompVis/latent-diffusion/blob/main/models/first_stage_models/kl-f32/config.yaml",
@@ -182,6 +219,63 @@ def Maisi_f4_d4(
         )
 
     return AutoencoderKL(encoder=encoder, decoder=decoder, **kwargs)
+
+@register_model(f"continuous.medvae.f8_d16")
+def MedVAE_f8_d16(
+    img_size=256,
+    dims=2,
+    ## Encoder decoder config
+    double_z=True,
+    z_channels=16,
+    in_channels=3,
+    out_ch=3,
+    ch=128,
+    ch_mult=[1, 2, 4, 4],
+    num_res_blocks=2,
+    attn_resolutions=[],
+    dropout=0.0,
+    **kwargs
+):
+
+    encoder = LDMEncoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
+    decoder = LDMDecoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
+
+    alignment = VFFoundationAlignment(latent_channels=z_channels, foundation_type="biomedclip")
+    return AutoencoderKL(encoder=encoder, decoder=decoder, alignment=alignment, **kwargs)
+
+
+@register_model(f"continuous.medvae.f8_d32")
+def MedVAE_f8_d32(**kwargs):
+    return MedVAE_f8_d16(z_channels=32, **kwargs)
+
+
+@register_model(f"continuous.vavae.f8_d32_dinov2")
+def VAVAE_f8_d32_dinov2(**kwargs):
+    return VAVAE_f8_d16_dinov2(z_channels=32, **kwargs)
+
+@register_model(f"continuous.vavae.f8_d16_dinov2")
+def VAVAE_f8_d16_dinov2(
+    img_size=256,
+    dims=2,
+    ## Encoder decoder config
+    double_z=True,
+    z_channels=16,
+    in_channels=3,
+    out_ch=3,
+    ch=128,
+    ch_mult=[1, 2, 4, 4],
+    num_res_blocks=2,
+    attn_resolutions=[],
+    dropout=0.0,
+    **kwargs
+):
+
+    encoder = LDMEncoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
+    decoder = LDMDecoder(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout)
+
+    alignment = VFFoundationAlignment(latent_channels=z_channels, foundation_type="dinov2")
+    return AutoencoderKL(encoder=encoder, decoder=decoder, alignment=alignment, **kwargs)
+
 
 @register_model(f"continuous.vavae.f16_d16_mae",
                 code_url="https://github.com/hustvl/LightningDiT/tree/2725fed42a14898744433809949834e26957bcdd",

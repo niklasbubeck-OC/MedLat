@@ -85,6 +85,7 @@ class ToPixel(nn.Module):
         self.img_size = _to_tuple(img_size, self.dims)
         kernel = _to_tuple(patch_size, self.dims)
         self.patch_size = kernel
+        self.patch_area = int(torch.tensor(self.patch_size).prod().item())
         stride = kernel
         self.grid_size = tuple(img // patch for img, patch in zip(self.img_size, kernel))
         self.num_patches = int(torch.tensor(self.grid_size).prod().item())
@@ -96,7 +97,8 @@ class ToPixel(nn.Module):
             else:
                 self.proj = nn.ConvTranspose3d(in_dim, out_channels, kernel_size=kernel, stride=stride)
         elif to_pixel == "linear":
-            self.proj = nn.Linear(in_dim, out_channels * self.num_patches)
+            # Map each patch token to its patch-area pixels, then unpatchify
+            self.proj = nn.Linear(in_dim, out_channels * self.patch_area)
         elif to_pixel == "identity":
             self.proj = nn.Identity()
         else: 
@@ -108,11 +110,21 @@ class ToPixel(nn.Module):
         grid = tuple(dim // patch for dim, patch in zip(target_size, self.patch_size))
         
         if isinstance(self.proj, nn.Linear):
-            # For Linear: apply to tokens first, then reshape to spatial
-            # tokens: (bsz, seq_len, in_dim)
-            # Linear: (bsz, seq_len, in_dim) -> (bsz, seq_len, out_channels * num_patches)
-            x = self.proj(tokens)  # (bsz, seq_len, out_channels * num_patches)
-            x = x.reshape(bsz, self.out_channels, *self.img_size)
+            # For Linear: map tokens to patch pixels then fold (unpatchify)
+            if self.dims == 2:
+                gh, gw = grid
+                ph, pw = self.patch_size
+                x = self.proj(tokens)  # (bsz, seq_len, out_channels * patch_area)
+                x = x.view(bsz, gh, gw, self.out_channels, ph, pw)
+                x = x.permute(0, 3, 1, 4, 2, 5).reshape(bsz, self.out_channels, gh * ph, gw * pw)
+            elif self.dims == 3:
+                gd, gh, gw = grid
+                pd, ph, pw = self.patch_size
+                x = self.proj(tokens)
+                x = x.view(bsz, gd, gh, gw, self.out_channels, pd, ph, pw)
+                x = x.permute(0, 4, 1, 5, 2, 6, 3, 7).reshape(bsz, self.out_channels, gd * pd, gh * ph, gw * pw)
+            else:
+                raise ValueError("Unsupported dims for linear to-pixel projection.")
         elif isinstance(self.proj, nn.Identity):
             # This is used in alignment modules where we need token format (B, L, D)
             return tokens

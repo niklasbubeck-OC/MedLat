@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math
 import torch.nn.functional as F
 import numpy as np
 from torch import einsum
@@ -13,7 +14,7 @@ from torch.amp import autocast
 from medtok.registry import register_model
 
 
-__all__ = ["VectorQuantizer", "GumbelQuantize", "SimpleQINCo", "VectorQuantizer2", "SimVQ", "ResidualQuantizer", "GroupedVQ", "MultiScaleResidualQuantizer", "LookupFreeQuantizer", "FiniteScalarQuantizer"]
+__all__ = ["VectorQuantizer", "GumbelQuantize", "SimpleQINCo", "VectorQuantizer2", "SimVQ", "ResidualQuantizer", "GroupedVQ", "MultiScaleResidualQuantizer", "LookupFreeQuantizer", "FiniteScalarQuantizer", "BinarySphericalQuantizer"]
 
 _REGISTRY_PREFIX = "discrete.quantizer."
 
@@ -350,11 +351,7 @@ class VectorQuantizer2(nn.Module):
         elif z.ndim == 5:
             z_q = rearrange(z_q, 'b d h w c -> b c d h w')
 
-        return z_q, loss, {
-            "perplexity": perplexity,
-            "entropy_loss": entropy_loss,
-            "indices": min_indices,
-        }
+        return z_q, loss, (perplexity, None, min_indices)
 
     def get_codebook_entry(self, indices, shape=None):
         z_q = self.embedding(indices)
@@ -381,7 +378,6 @@ class SimpleQINCo(VectorQuantizer2):
             hidden_dim=hidden_dim,
             num_layers=num_layers
         )
-
 
 
 class SimVQ(nn.Module):
@@ -999,7 +995,67 @@ class LookupFreeQuantizer(torch.nn.Module):
     def convert_indices_to_bits(self, indices: torch.Tensor) -> torch.Tensor:
         indices = indices.long()
         return self.get_codebook_entry(indices)
+
+@register_model(f"{_REGISTRY_PREFIX}binary_spherical_quantizer",
+paper_url="https://arxiv.org/pdf/2406.07548",
+code_url="https://github.com/zhaoyue-zephyrus/bsq-vit",)
+class BinarySphericalQuantizer(LookupFreeQuantizer):
+    """BSQ by inheriting LFQ - only overrides forward with L2 normalization"""
     
+    @autocast('cuda', enabled=False)
+    def forward(self, z: torch.Tensor):
+        z = z.float()
+        orig_ndim = z.ndim
+        
+        # Reshape to channel-last for norm/sign
+        if z.ndim == 4:  # (B,C,H,W) -> (B,H,W,C)
+            z = rearrange(z, 'b c h w -> b h w c').contiguous()
+        elif z.ndim == 5:  # (B,C,D,H,W) -> (B,D,H,W,C)
+            z = rearrange(z, 'b c d h w -> b d h w c').contiguous()
+
+        # *** BSQ CORE: L2 normalize to unit sphere ***
+        z_norm = torch.norm(z, dim=-1, keepdim=True) + 1e-8
+        z_unit = z / z_norm  # u = v / ||v|| [file:1]
+        
+        # Binary quantize on sphere
+        ones = torch.ones_like(z_unit)
+        sign_mask = (z_unit > 0.0)
+        sign_u = torch.where(sign_mask, ones, -ones)
+        sign_u = torch.where(z_unit == 0, ones, sign_u)  # sign(0) -> 1
+        
+        # Scale to unit sphere: hat{u} = sign(u) / sqrt(L)
+        sqrt_L = 1.0 / math.sqrt(self.token_size)
+        z_quantized = sqrt_L * sign_u
+
+        # Indices from unscaled signs (LFQ compatible)
+        min_encoding_indices = self.convert_bits_to_indices(sign_u)
+
+        # Losses (use unit sphere reference)
+        commitment_loss = self.commitment_cost * F.mse_loss(z_quantized.detach(), z_unit)
+        
+        # Entropy on normalized input (better soft quantization)
+        entropy_loss = torch.zeros((), device=z.device)
+        per_sample_entropy = torch.zeros((), device=z.device)
+        avg_entropy = torch.zeros((), device=z.device)
+        
+        if self.entropy_loss_weight != 0.0 and self.training:
+            d = -2 * torch.einsum('... c, n c -> ... n', z_unit, self.codebook)
+            per_sample_entropy, avg_entropy = entropy_loss_fn(-d, self.entropy_loss_temperature, self.entropy_gamma)
+            entropy_loss = self.entropy_loss_weight * (per_sample_entropy - avg_entropy)
+
+        loss = commitment_loss + entropy_loss
+
+        # Straight-Through Estimator on unit sphere
+        z_q = z_unit + (z_quantized - z_unit).detach()
+
+        # Reshape back
+        if orig_ndim == 4:
+            z_q = rearrange(z_q, 'b h w c -> b c h w').contiguous()
+        elif orig_ndim == 5:
+            z_q = rearrange(z_q, 'b d h w c -> b c d h w').contiguous()
+
+        return z_q, loss, (per_sample_entropy, None, min_encoding_indices)
+
 
 @register_model(f"{_REGISTRY_PREFIX}finite_scalar_quantizer",
                 paper_url="https://arxiv.org/pdf/2309.15505",)

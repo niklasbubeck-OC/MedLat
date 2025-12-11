@@ -7,6 +7,8 @@ import torch.nn.functional as F
 import math
 import cv2
 import numpy as np
+import open_clip
+import torchvision.transforms as T
 
 # For external models (DINO, CLIP) - try importing timm but make it optional
 try:
@@ -204,11 +206,24 @@ class AlignmentModule(ABC, nn.Module):
         if input_image is None:
             raise ValueError("AlignmentModule requires input_image to compute target features")
 
-        # predicted features from decoder/projection
-        pred = self.decode_projection(quant)  # (B, L, D)
         # target features (usually frozen model)
         with torch.no_grad():
             target = self.compute_target(input_image)  # (B, L, D_target)
+
+        # Allow subclasses to adapt projection heads if target dim changes with image size
+        self.ensure_projection_dim(target.size(-1))
+
+        # predicted features from decoder/projection
+        pred = self.decode_projection(quant)  # (B, L_pred, D)
+
+        # Align token grids if lengths differ (e.g., different patch sizes)
+        if pred.shape[1] != target.shape[1]:
+            pred = self._interpolate_tokens_to_match(pred, target)
+            if mask is not None:
+                mask = self._interpolate_mask_to_match(mask, target)
+        elif mask is not None and mask.shape[1] != pred.shape[1]:
+            # If pred and target already match but mask length differs, align mask to pred
+            mask = self._interpolate_mask_to_match(mask, pred)
 
         # normalize both (original code normalized for dino/clip)
         pred_n = F.normalize(pred, dim=-1)
@@ -229,6 +244,50 @@ class AlignmentModule(ABC, nn.Module):
             loss = loss.mean()
 
         return loss, pred
+
+    # ------------------------------------------------------------------ #
+    # Helpers for dynamic projection and token/mask alignment
+    # ------------------------------------------------------------------ #
+    def ensure_projection_dim(self, target_dim: int):
+        """Subclasses can override if their projection depends on target dim."""
+        return
+
+    def _infer_grid_hw(self, seq_len: int) -> Tuple[int, int]:
+        """Infer a square grid (h, w) from sequence length."""
+        side = int(math.sqrt(seq_len))
+        if side * side != seq_len:
+            raise ValueError(f"Cannot infer square grid from seq_len={seq_len}")
+        return side, side
+
+    def _interpolate_tokens_to_match(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Reshape pred tokens to grid, interpolate to target grid, then flatten back.
+        Assumes 2D tokens.
+        """
+        b, lp, c = pred.shape
+        lt = target.shape[1]
+        ph, pw = self._infer_grid_hw(lp)
+        th, tw = self._infer_grid_hw(lt)
+        pred_map = pred.view(b, ph, pw, c).permute(0, 3, 1, 2)  # (B, C, H, W)
+        pred_map = F.interpolate(pred_map, size=(th, tw), mode='bilinear', align_corners=False)
+        pred = pred_map.permute(0, 2, 3, 1).reshape(b, lt, c)
+        return pred
+
+    def _interpolate_mask_to_match(self, mask: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Reshape mask tokens to grid, interpolate to target grid, then flatten back.
+        Keeps mask float-valued.
+        """
+        if mask.dim() == 2:
+            mask = mask.unsqueeze(-1)
+        b, lp, c = mask.shape
+        lt = target.shape[1]
+        ph, pw = self._infer_grid_hw(lp)
+        th, tw = self._infer_grid_hw(lt)
+        mask_map = mask.view(b, ph, pw, c).permute(0, 3, 1, 2)  # (B, C, H, W)
+        mask_map = F.interpolate(mask_map, size=(th, tw), mode='nearest')
+        mask = mask_map.permute(0, 2, 3, 1).reshape(b, lt, c)
+        return mask
 
 ########################################################################
 # HOG alignment module
@@ -253,6 +312,11 @@ class HOGAlignment(AlignmentModule):
         self.hog_generator = HOGGenerator()
 
         self.hog_use_movq = use_movq
+
+    def ensure_projection_dim(self, target_dim: int):
+        # Rebuild projection if target channels change with image size
+        if self.to_pixel.out_features != target_dim:
+            self.to_pixel = nn.Linear(self.decoder.embed_dim, target_dim).to(self.to_pixel.weight.device)
 
     def compute_target(self, x: torch.Tensor) -> torch.Tensor:
         # HOG generator returns (B, L, 108) presumably
@@ -419,6 +483,66 @@ class ClipAlignment(AlignmentModule):
 
 
 ########################################################################
+# BiomedCLIP alignment module (mirrors original BiomedClipLoss behavior)
+########################################################################
+# class BiomedClipAlignment(nn.Module):
+#     def __init__(
+#         self,
+#         embed_dim: int,
+#         decoder: nn.Module = None,
+#     ):
+#         super().__init__()
+#         self.embed_dim = embed_dim
+#         self.decoder = decoder
+#         if self.decoder is None: # then use original default
+#             self.decoder = torch.nn.Sequential(
+#                 torch.nn.Conv2d(self.embed_dim, 64, 1),
+#                 torch.nn.ReLU(),
+#                 torch.nn.Conv2d(64, 64, 3, padding="same"),
+#                 torch.nn.ReLU(),
+#                 torch.nn.Conv2d(64, self.embed_dim, 1),
+#             )
+#         self.channel_proj = torch.nn.Conv2d(self.embed_dim, self.embed_dim, 1)
+
+
+#         # Load BiomedCLIP (OpenCLIP) and set to eval/frozen
+#         self.clip_model, _, _ = open_clip.create_model_and_transforms(
+#             model_name="hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
+#         )
+#         for p in self.clip_model.parameters():
+#             p.requires_grad_(False)
+#         self.clip_model.eval()
+
+#         # Preprocessing to mirror the original loss
+#         self.transform = T.Compose(
+#             [
+#                 T.Resize(size=224, interpolation=T.InterpolationMode.BICUBIC, antialias=True),
+#                 T.CenterCrop(size=(224, 224)),
+#                 T.Normalize(
+#                     mean=[0.48145466, 0.4578275, 0.40821073],
+#                     std=[0.26862954, 0.26130258, 0.27577711],
+#                 ),
+#             ]
+#         )
+
+#     def forward(self, quant: torch.Tensor, input_image: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None):
+#         if input_image is None:
+#             raise ValueError("BiomedClipAlignment requires input_image to compute target features")
+
+#         latent = self.channel_proj(self.decoder(quant) + quant)  # (B, L, D)
+#         img = self.transform(input_image)
+#         img_features = self.clip_model.encode_image(img)  # (B, D)
+
+#         latent = latent / 4.6
+#         latent = latent.mean(1, keepdim=True)
+#         latent = self.transform(latent.expand(-1, 3, -1, -1))
+#         latent_features = self.clip_model.encode_image(latent)
+
+#         img_lat_loss = ((img_features - latent_features) ** 2).sum(1).mean()
+#         return img_lat_loss, None
+
+
+########################################################################
 # Vision-Foundation alignment module (VA-VAE style)
 ########################################################################
 
@@ -439,16 +563,34 @@ class FoundationFeatureExtractor(nn.Module):
         if self.model_type == "mae":
             model_name = "hf-hub:timm/vit_large_patch16_224.mae"
             self.model = create_model(model_name, pretrained=True, dynamic_img_size=True)
+            self.patch_size = 16
+            self.base_size = 224
+            self.feature_dim = 1024
         elif self.model_type == "dinov2":
             model_name = "hf-hub:timm/vit_large_patch14_dinov2.lvd142m"
             self.model = create_model(model_name, pretrained=True, dynamic_img_size=True)
+            self.patch_size = 14
+            self.base_size = 224
+            self.feature_dim = 1024
+        elif self.model_type == "biomedclip":
+            # OpenCLIP BiomedCLIP ViT-B/16; use encode_image for vision tower
+            self.model, _, _ = open_clip.create_model_and_transforms(
+                model_name="hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
+            )
+            self.patch_size = 16
+            self.base_size = 224
+            # ViT-B hidden dim
+            self.feature_dim = 512
+            # Normalize inputs like OpenCLIP preprocess
+            mean = torch.tensor(self.model.visual.image_mean).view(1, -1, 1, 1)
+            std = torch.tensor(self.model.visual.image_std).view(1, -1, 1, 1)
+            self.register_buffer("biomed_mean", mean)
+            self.register_buffer("biomed_std", std)
         else:
             raise ValueError(f"Unsupported foundation model type: {model_type}")
 
         self.model.requires_grad_(False)
         self.model.eval()
-        # Common channel dim for both MAE/DINOv2-L
-        self.feature_dim = 1024
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -461,11 +603,17 @@ class FoundationFeatureExtractor(nn.Module):
             feat_h = 224 // 14  # = 16
             feat_w = 224 // 14  # = 16
             return tokens.reshape(b, feat_h, feat_w, -1).permute(0, 3, 1, 2)
+        if self.model_type == "biomedclip":
+            # BiomedCLIP ViT-B/16: use encode_image, returns (B, D)
+            x_resized = nn.functional.interpolate(x, size=(self.base_size, self.base_size), mode='bilinear', align_corners=False)
+            x_norm = (x_resized - self.biomed_mean.to(x_resized.device)) / self.biomed_std.to(x_resized.device)
+            emb = self.model.encode_image(x_norm)  # (B, D)
+            return emb.unsqueeze(-1).unsqueeze(-1)  # (B, D, 1, 1)
 
         # MAE supports dynamic image size; reshape patch tokens (drop cls).
         tokens = self.model.forward_features(x)[:, 1:]
-        feat_h = h // 16
-        feat_w = w // 16
+        feat_h = h // self.patch_size
+        feat_w = w // self.patch_size
         return tokens.reshape(b, feat_h, feat_w, -1).permute(0, 3, 1, 2)
 
 
@@ -574,4 +722,5 @@ class VFFoundationAlignment(AlignmentModule):
         ).mean()
 
         vf_loss = vf_loss_1 * self.distmat_weight + vf_loss_2 * self.cos_weight
+        # print(vf_loss_1, vf_loss_2, vf_loss)
         return vf_loss, z_proj
