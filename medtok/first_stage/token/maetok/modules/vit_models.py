@@ -648,7 +648,7 @@ class MAETokViTDecoder(nn.Module):
         return {'pos_embed', 'cls_token', 'mask_token', 'latent_pos_embed'}
 
     @property
-    def last_layer(self):
+    def get_last_layer(self):
         return self.to_pixel.get_last_layer()
 
     def forward(self, z, interpolate_zq=None, H=None, W=None, D=None):
