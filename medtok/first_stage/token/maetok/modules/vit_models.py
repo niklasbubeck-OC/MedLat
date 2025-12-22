@@ -647,7 +647,6 @@ class MAETokViTDecoder(nn.Module):
     def no_weight_decay(self):
         return {'pos_embed', 'cls_token', 'mask_token', 'latent_pos_embed'}
 
-    @property
     def get_last_layer(self):
         return self.to_pixel.get_last_layer()
 
