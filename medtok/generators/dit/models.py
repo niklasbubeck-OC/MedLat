@@ -326,30 +326,28 @@ class DiT(nn.Module):
         return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale, dataset_id=None):
-        half = x[: len(x) // 2]
-        combined = torch.cat([half, half], dim=0)
+        batch_size = len(x) // 2  # Sampler already doubled x (64 -> 128)
         
-        # Handle CFG for both label and dataset
-        y_cfg = torch.cat([y, torch.full_like(y, self.y_embedder.num_classes)], dim=0)
+        # Extract original batch size inputs (first half only)
+        t = t[:batch_size].expand(2 * batch_size)  # Double timesteps
+        y_cond = y[:batch_size]  # Original labels (64)
+        y_uncond = torch.full_like(y_cond, self.y_embedder.num_classes)
+        y_cfg = torch.cat([y_cond, y_uncond], dim=0)  # 128 total
         
-        if self.use_dataset_conditioning:
-            if dataset_id is not None:
-                dataset_id_cfg = torch.cat([
-                    dataset_id,
-                    torch.full_like(dataset_id, self.dataset_embedder.num_datasets)
-                ], dim=0)
-            else:
-                dataset_id_cfg = torch.full((combined.shape[0],), self.dataset_embedder.num_datasets, 
-                                          device=combined.device, dtype=torch.long)
+        if self.use_dataset_conditioning and dataset_id is not None:
+            ds_cond = dataset_id[:batch_size]
+            ds_uncond = torch.full_like(ds_cond, self.dataset_embedder.num_datasets)
+            dataset_id_cfg = torch.cat([ds_cond, ds_uncond], dim=0)
         else:
             dataset_id_cfg = None
-            
-        model_out = self.forward(combined, t, y_cfg, dataset_id_cfg)
+                
+        # Forward handles learn_sigma automatically via self.out_channels
+        model_out = self.forward(x, t, y_cfg, dataset_id_cfg)  # Shape: (128, out_channels, H, W, D)
         
-        # FIXED: Apply CFG to ALL channels (not just noise)
-        cond_out, uncond_out = torch.split(model_out, len(model_out) // 2, dim=0)
+        # Full CFG on ALL channels regardless of learn_sigma
+        cond_out, uncond_out = torch.split(model_out, batch_size, dim=0)
         guided_out = uncond_out + cfg_scale * (cond_out - uncond_out)
-        return guided_out
+        return guided_out  # Shape: (128, out_channels*2 if learn_sigma else out_channels, H, W, D)
 
 
 
