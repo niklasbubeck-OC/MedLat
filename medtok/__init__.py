@@ -1,5 +1,6 @@
 from .first_stage import *  # noqa: F401,F403
 from .generators import *  # noqa: F401,F403
+from .modules.wrapper import GenWrapper
 from .registry import (
     MODEL_REGISTRY,
     available_models,
@@ -12,4 +13,5 @@ __all__ = [
     "available_models",
     "get_model",
     "register_model",
+    "GenWrapper",
 ]

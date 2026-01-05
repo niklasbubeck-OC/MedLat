@@ -168,10 +168,7 @@ class DatasetEmbedder(nn.Module):
 #################################################################################
 
 class DiTBlock(nn.Module):
-    """
-    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
-    """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, cond_dim=None, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
@@ -179,9 +176,10 @@ class DiTBlock(nn.Module):
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
         self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        # FIXED: Accept cond_dim input (2x or 3x hidden_size)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+            nn.Linear(cond_dim or hidden_size, 6 * hidden_size, bias=True)
         )
 
     def forward(self, x, c):
@@ -191,18 +189,14 @@ class DiTBlock(nn.Module):
         x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
-
 class FinalLayer(nn.Module):
-    """
-    The final layer of DiT.
-    """
-    def __init__(self, hidden_size, patch_size, out_channels):
+    def __init__(self, hidden_size, patch_size, out_channels, cond_dim=None):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, math.prod(patch_size) * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(hidden_size, 2 * hidden_size, bias=True)
+            nn.Linear(cond_dim or hidden_size, 2 * hidden_size, bias=True)
         )
 
     def forward(self, x, c):
@@ -212,9 +206,10 @@ class FinalLayer(nn.Module):
         return x
 
 
+
 class DiT(nn.Module):
     """
-    Diffusion model with a Transformer backbone.
+    Improved Diffusion Transformer with strong dataset+label conditioning.
     """
     def __init__(
         self,
@@ -226,7 +221,7 @@ class DiT(nn.Module):
         depth=28,
         num_heads=16,
         mlp_ratio=4.0,
-        label_drop_prob=0.1,
+        label_drop_prob=0.25,  # Increased for stronger CFG
         num_classes=1000,
         dataset_num=None,
         learn_sigma=True,
@@ -243,36 +238,39 @@ class DiT(nn.Module):
 
         print(f"img_size: {self.img_size}, vae_stride: {vae_stride}")
         self.img_size = tuple(i // v for i, v in zip(self.img_size, (vae_stride,) * self.dims))
-
         print(f"img_size: {self.img_size}, patch_size: {self.patch_size}")
 
         self.learn_sigma = learn_sigma
         self.in_channels = in_channels
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.num_heads = num_heads
+        self.hidden_size = hidden_size
+        
+        # FIXED: Support 3 conditions (t, y, dataset) -> 3*hidden_size input
+        self.cond_dim = 3 * hidden_size if dataset_num is not None else 2 * hidden_size
 
-        self.x_embedder = PatchEmbed(to_embed='conv', img_size=self.img_size, patch_size=self.patch_size, in_chans=in_channels, embed_dim=hidden_size)
-        self.to_pixel = ToPixel(to_pixel='none', img_size=self.img_size, out_channels=self.out_channels, in_dim=hidden_size, patch_size=self.patch_size)
+        self.x_embedder = PatchEmbed(to_embed='conv', img_size=self.img_size, patch_size=self.patch_size, 
+                                   in_chans=in_channels, embed_dim=hidden_size)
+        self.to_pixel = ToPixel(to_pixel='none', img_size=self.img_size, out_channels=self.out_channels, 
+                              in_dim=hidden_size, patch_size=self.patch_size)
         self.t_embedder = TimestepEmbedder(hidden_size)
         self.y_embedder = LabelEmbedder(num_classes, hidden_size, label_drop_prob)
         
-        # Dataset ID Embedding (optional)
         self.use_dataset_conditioning = dataset_num is not None
         if self.use_dataset_conditioning:
             self.dataset_embedder = DatasetEmbedder(dataset_num, hidden_size, label_drop_prob)
         
         num_patches = self.x_embedder.num_patches
-        # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         self.blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, cond_dim=self.cond_dim) 
+            for _ in range(depth)
         ])
-        self.final_layer = FinalLayer(hidden_size, self.patch_size, self.out_channels)
+        self.final_layer = FinalLayer(hidden_size, self.patch_size, self.out_channels, cond_dim=self.cond_dim)
         self.initialize_weights()
 
     def initialize_weights(self):
-        # Initialize transformer layers:
         def _basic_init(module):
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight)
@@ -280,7 +278,6 @@ class DiT(nn.Module):
                     nn.init.constant_(module.bias, 0)
         self.apply(_basic_init)
 
-        # Initialize (and freeze) pos_embed by sin-cos embedding:
         if self.dims == 2:
             pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], self.x_embedder.grid_size)
         elif self.dims == 3:
@@ -289,90 +286,71 @@ class DiT(nn.Module):
             raise ValueError(f"dims must be 2 or 3, got {self.dims}")
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
         w = self.x_embedder.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
-        # Initialize label embedding table:
         nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
-        
-        # Initialize dataset embedding table if used:
         if self.use_dataset_conditioning:
-            nn.init.normal_(self.dataset_embedder.embedding_table.weight, std=0.02)
-
-        # Initialize timestep embedding MLP:
+            nn.init.normal_(self.dataset_embedder.embedding_table.weight, std=0.05)  # Stronger dataset signal
+            
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        # Zero-out adaLN modulation layers in DiT blocks:
+        # Zero-out adaLN modulation layers (now takes cond_dim input)
         for block in self.blocks:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-
-        # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
     def forward(self, x, t, y, dataset_id=None):
-        """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        y: (N,) tensor of class labels
-        dataset_id: (N,) tensor of dataset IDs, optional. Only used if dataset_num was provided in __init__
-        """
-        x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
-        c = t + y                                # (N, D)
+        x = self.x_embedder(x) + self.pos_embed
+        t_emb = self.t_embedder(t)
+        y_emb = self.y_embedder(y, self.training)
         
-        # Add dataset embedding if dataset conditioning is enabled
+        # FIXED: Concatenate instead of add to avoid signal interference
+        c_list = [t_emb, y_emb]
         if self.use_dataset_conditioning and dataset_id is not None:
-            dataset_emb = self.dataset_embedder(dataset_id, self.training)  # (N, D)
-            c = c + dataset_emb
+            ds_emb = self.dataset_embedder(dataset_id, self.training)
+            c_list.append(ds_emb)
+        
+        c = torch.cat(c_list, dim=1)  # (N, cond_dim)
         
         for block in self.blocks:
-            x = block(x, c)                      # (N, T, D)
-        x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
-        x = self.to_pixel(x)                   # (N, out_channels, H, W)
+            x = block(x, c)
+        x = self.final_layer(x, c)
+        x = self.to_pixel(x)
         return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale, dataset_id=None):
-        """
-        Forward pass of DiT, but also batches the unconditional forward pass for classifier-free guidance.
-        """
-        # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
         combined = torch.cat([half, half], dim=0)
         
-        # Prepare dataset_id for CFG: first half gets real dataset_id, second half gets fake (unconditional)
+        # Handle CFG for both label and dataset
+        y_cfg = torch.cat([y, torch.full_like(y, self.y_embedder.num_classes)], dim=0)
+        
         if self.use_dataset_conditioning:
             if dataset_id is not None:
-                # Concatenate real dataset_id for conditional pass and fake for unconditional pass
                 dataset_id_cfg = torch.cat([
                     dataset_id,
-                    torch.full_like(dataset_id, self.dataset_embedder.num_datasets)  # Use fake dataset ID for unconditional
+                    torch.full_like(dataset_id, self.dataset_embedder.num_datasets)
                 ], dim=0)
             else:
-                # If dataset_id is None, use fake for both (fully unconditional)
                 dataset_id_cfg = torch.full((combined.shape[0],), self.dataset_embedder.num_datasets, 
-                                           device=combined.device, dtype=torch.long)
+                                          device=combined.device, dtype=torch.long)
         else:
             dataset_id_cfg = None
+            
+        model_out = self.forward(combined, t, y_cfg, dataset_id_cfg)
         
-        model_out = self.forward(combined, t, y, dataset_id_cfg)
-        # For exact reproducibility reasons, we apply classifier-free guidance on only
-        # three channels by default. The standard approach to cfg applies it to all channels.
-        # This can be done by uncommenting the following line and commenting-out the line following that.
-        eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
-        # eps, rest = model_out[:, :3], model_out[:, 3:]
-        cond_eps, uncond_eps = torch.split(eps, len(eps) // 2, dim=0)
-        half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
-        eps = torch.cat([half_eps, half_eps], dim=0)
-        return torch.cat([eps, rest], dim=1)
+        # FIXED: Apply CFG to ALL channels (not just noise)
+        cond_out, uncond_out = torch.split(model_out, len(model_out) // 2, dim=0)
+        guided_out = uncond_out + cfg_scale * (cond_out - uncond_out)
+        return guided_out
+
 
 
 if __name__ == "__main__":
