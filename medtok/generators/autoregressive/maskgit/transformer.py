@@ -316,6 +316,11 @@ class MaskGIT(nn.Module):
 
         # Add dataset embedding to class token (position 0) if dataset conditioning is enabled
         if self.use_dataset_conditioning:
+            zeros_ds = torch.zeros(
+                input_embeddings.size(0), 1, input_embeddings.size(-1),
+                device=input_embeddings.device, dtype=input_embeddings.dtype
+            )
+            input_embeddings = torch.cat([zeros_ds, input_embeddings], dim=1)
             drop_prob = self.dataset_label_drop_prob
             if dataset_id is not None:
                 if drop_prob > 0:
@@ -330,9 +335,9 @@ class MaskGIT(nn.Module):
             else:
                 dataset_embedding = self.fake_dataset_latent.expand(bsz, -1)
 
-            # Add dataset embedding to class token position
-            input_embeddings[:, 0] = input_embeddings[:, 0] + dataset_embedding
-
+            # Add dataset embedding
+            input_embeddings[:, 0] = dataset_embedding
+        print(f"input_embeddings.shape: {input_embeddings.shape}")
         # No dropping needed because we use BEiT style architecture
         # dropping
         # token_keep_mask = 1 - token_drop_mask
@@ -351,8 +356,13 @@ class MaskGIT(nn.Module):
     def forward_loss(self, gt_indices, logits, mask):
         bsz, seq_len = gt_indices.size()
         # logits and mask are with seq_len+1 but gt_indices is with seq_len
-        logits = logits[:, 1:, :self.codebook_size].reshape(bsz*seq_len, -1)
-        gt_indices = gt_indices.reshape(bsz*seq_len)
+        if self.use_dataset_conditioning:
+            logits = logits[:, 2:, :self.codebook_size].reshape(bsz*seq_len, -1)
+            gt_indices = gt_indices.reshape(bsz*seq_len)
+        else:
+            logits = logits[:, 1:, :self.codebook_size].reshape(bsz*seq_len, -1)
+            gt_indices = gt_indices.reshape(bsz*seq_len)
+
 
         loss = self.criterion(logits, gt_indices)
         loss = loss.reshape(bsz, seq_len)
@@ -473,6 +483,11 @@ class MaskGIT(nn.Module):
             
             # Add dataset embedding to class token (position 0) if dataset conditioning is enabled
             if dataset_embedding is not None:
+                zeros_ds = torch.zeros(
+                    input_embeddings.size(0), 1, input_embeddings.size(-1),
+                    device=input_embeddings.device, dtype=input_embeddings.dtype
+                )
+                input_embeddings = torch.cat([zeros_ds, input_embeddings], dim=1)
                 input_embeddings[:, 0] = input_embeddings[:, 0] + dataset_embedding
             
             x = input_embeddings
@@ -481,7 +496,10 @@ class MaskGIT(nn.Module):
             latent = self.norm(x)
 
             # 4. Remove class token from output
-            latent = latent[:, 1:, :]  # [bsz, seq_len, hidden_dim]
+            if self.use_dataset_conditioning:
+                latent = latent[:, 2:, :]  # [bsz, seq_len, hidden_dim]
+            else:
+                latent = latent[:, 1:, :]  # [bsz, seq_len, hidden_dim]
 
             # 5. Get logits from MLM head
             word_embeddings = self.token_emb.word_embeddings.weight.detach()
