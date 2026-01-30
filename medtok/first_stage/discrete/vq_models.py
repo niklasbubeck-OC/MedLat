@@ -4,7 +4,7 @@ from torch import nn
 from medtok.utils import init_from_ckpt
 from typing import Optional, Sequence, Union, List, Any, Dict, Tuple
 from medtok.first_stage.discrete.modules.ldm_modules import get_conv_layer
-
+from medtok.modules.alignments import AlignmentModule
 __all__ = ["VQModel"]
 
 
@@ -14,17 +14,19 @@ class VQModel(nn.Module):
         encoder: nn.Module,
         decoder: nn.Module,
         quantizer: nn.Module,
+        alignment: AlignmentModule = None,
         ckpt_path=None,
         # Additional parameters
         quant_conv_ks=1,   ## in var its 3, but VQVAE / VQGAN uses 1
+        pre_post_layer="conv",
     ):
         super().__init__()
         self.embed_dim = quantizer.e_dim
         self.n_embed = quantizer.n_e
         self.dims = getattr(encoder, "dims", 2)
-        conv_layer = get_conv_layer(self.dims)
         self.encoder = encoder
         self.decoder = decoder
+        self.alignment = alignment
         self.z_channels = getattr(encoder, "z_channels", None)
         self.quantizer = quantizer
 
@@ -32,10 +34,14 @@ class VQModel(nn.Module):
             raise ValueError(f"Encoder {encoder.__class__.__name__} must define z_channels.")
 
         self.vae_stride = getattr(encoder, "vae_stride", None)
-        if self.vae_stride is None:
-            raise ValueError(f"Encoder {encoder.__class__.__name__} must define vae_stride.")
-        self.quant_conv = conv_layer(self.z_channels, self.embed_dim, quant_conv_ks, stride=1, padding=quant_conv_ks//2)
-        self.post_quant_conv = conv_layer(self.embed_dim, self.z_channels, quant_conv_ks, stride=1, padding=quant_conv_ks//2)
+        if pre_post_layer == "conv":
+            conv_layer = get_conv_layer(self.dims)
+            self.quant_conv = conv_layer(self.z_channels, self.embed_dim, quant_conv_ks, stride=1, padding=quant_conv_ks//2)
+            self.post_quant_conv = conv_layer(self.embed_dim, self.z_channels, quant_conv_ks, stride=1, padding=quant_conv_ks//2)
+        elif pre_post_layer == "linear":
+            self.quant_conv = nn.Linear(self.z_channels, self.embed_dim)
+            self.post_quant_conv = nn.Linear(self.embed_dim, self.z_channels)
+
 
         if ckpt_path is not None: 
             init_from_ckpt(self, ckpt_path)
@@ -91,6 +97,11 @@ class VQModel(nn.Module):
     def forward(self, input, return_pred_indices=False):
         quant, diff, (_,_,ind) = self.encode(input)
         dec = self.decode(quant)
+
+        if self.alignment is not None:
+            alignment_loss, _ = self.alignment(quant, input)
+            diff = diff + alignment_loss
+            
         if return_pred_indices:
             return dec, diff, ind
         return dec, diff

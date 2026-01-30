@@ -4,6 +4,7 @@ from medtok.registry import register_model
 from medtok.first_stage.discrete.modules.ldm_modules import Encoder, Decoder
 from medtok.first_stage.discrete.vq_models import VQModel
 from medtok.first_stage.discrete.quantizer import *
+from medtok.modules.alignments import *
 
 @register_model("discrete.vq.f4_d3_e8192")
 def VQ_f4_d3_e8192(
@@ -2055,3 +2056,65 @@ def QINCo_f16_d8_e16384(
         dropout_start_level=dropout_start_level,
     )
     return VQModel(encoder, decoder, quantizer, **kwargs)
+
+@register_model(f"continuous.soft_vq.f4_d3_e8192")
+def SoftVQ_f4_d3_e8192(
+    # --- encoder/decoder config ---
+        img_size=256,
+        dims=2,
+        double_z=False,
+        z_channels=3,
+        in_channels=3,
+        out_ch=3,
+        ch=128,
+        ch_mult=[1, 2, 4],
+        num_res_blocks=2,
+        attn_resolutions=[],
+        dropout=0.0,
+        # --- quantizer config ---
+        n_e=8192,
+        e_dim=3,
+        entropy_loss_weight=0.01,
+        entropy_loss_temperature=0.01,
+        entropy_gamma=1.0,
+        tau=0.07,
+        use_norm=True,
+        **kwargs
+    ):
+    encoder = Encoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    decoder = Decoder(
+        img_size=img_size,
+        dims=dims,
+        double_z=double_z,
+        z_channels=z_channels,
+        in_channels=in_channels,
+        out_ch=out_ch,
+        ch=ch,
+        ch_mult=ch_mult,
+        num_res_blocks=num_res_blocks,
+        attn_resolutions=attn_resolutions,
+        dropout=dropout
+    )
+    quantizer = SoftVectorQuantizer(
+        n_e=n_e,
+        e_dim=e_dim,
+        entropy_loss_weight=entropy_loss_weight,
+        entropy_loss_temperature=entropy_loss_temperature,
+        entropy_gamma=entropy_gamma,
+        tau=tau,
+        use_norm=use_norm,
+    )
+    alignment = VFFoundationAlignment(latent_channels=z_channels, foundation_type="dinov2")
+    return VQModel(encoder, decoder, quantizer, alignment=alignment, **kwargs)

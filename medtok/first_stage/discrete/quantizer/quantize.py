@@ -14,7 +14,7 @@ from torch.amp import autocast
 from medtok.registry import register_model
 
 
-__all__ = ["VectorQuantizer", "GumbelQuantize", "SimpleQINCo", "VectorQuantizer2", "SimVQ", "ResidualQuantizer", "GroupedVQ", "MultiScaleResidualQuantizer", "LookupFreeQuantizer", "FiniteScalarQuantizer", "BinarySphericalQuantizer", "QINCo", "QincoResidualQuantizer"]
+__all__ = ["VectorQuantizer", "GumbelQuantize", "SimpleQINCo", "VectorQuantizer2", "SimVQ", "ResidualQuantizer", "MultiScaleResidualQuantizer", "LookupFreeQuantizer", "FiniteScalarQuantizer", "BinarySphericalQuantizer", "QINCo", "QincoResidualQuantizer", "SoftVectorQuantizer"]
 
 _REGISTRY_PREFIX = "discrete.quantizer."
 
@@ -833,97 +833,97 @@ class QincoResidualQuantizer(nn.Module):
 
         return final_quantized, total_loss, (all_perplexities, quantized_outputs, all_indices)
 
-@register_model(f"{_REGISTRY_PREFIX}grouped_residual_quantizer",
-    code_url="https://github.com/yangdongchao/AcademiCodec",
-    paper_url="https://arxiv.org/pdf/2305.02765",
-    description="Grouped VQ for improved efficiency original uses ResidualQuantizers!")
-class GroupedVQ(nn.Module):
-    """
-    Applies a quantizer independently on channel groups.
-    Each group gets its own quantizer instance (usually ResidualQuantizer).
-    """
-    def __init__(
-        self,
-        quantizer_class: nn.Module,
-        in_channels: int,
-        quantizer_kwargs_list: List[Dict],
-        groups: int = 1,
-        split_dim: int = 1,
-    ):
-        super().__init__()
-        self.in_channels = in_channels
-        self.groups = groups
-        self.split_dim = split_dim
+# @register_model(f"{_REGISTRY_PREFIX}grouped_residual_quantizer",
+#     code_url="https://github.com/yangdongchao/AcademiCodec",
+#     paper_url="https://arxiv.org/pdf/2305.02765",
+#     description="Grouped VQ for improved efficiency original uses ResidualQuantizers!")
+# class GroupedVQ(nn.Module):
+#     """
+#     Applies a quantizer independently on channel groups.
+#     Each group gets its own quantizer instance (usually ResidualQuantizer).
+#     """
+#     def __init__(
+#         self,
+#         quantizer_class: nn.Module,
+#         in_channels: int,
+#         quantizer_kwargs_list: List[Dict],
+#         groups: int = 1,
+#         split_dim: int = 1,
+#     ):
+#         super().__init__()
+#         self.in_channels = in_channels
+#         self.groups = groups
+#         self.split_dim = split_dim
 
-        assert in_channels % groups == 0, \
-            f"in_channels {in_channels} must be divisible by groups {groups}"
-        assert len(quantizer_kwargs_list) == groups, \
-            "One quantizer config per group required"
+#         assert in_channels % groups == 0, \
+#             f"in_channels {in_channels} must be divisible by groups {groups}"
+#         assert len(quantizer_kwargs_list) == groups, \
+#             "One quantizer config per group required"
 
-        # Build one quantizer per group (usually ResidualQuantizer)
-        self.vqs = nn.ModuleList([
-            quantizer_class(**quantizer_kwargs_list[i])
-            for i in range(groups)
-        ])
+#         # Build one quantizer per group (usually ResidualQuantizer)
+#         self.vqs = nn.ModuleList([
+#             quantizer_class(**quantizer_kwargs_list[i])
+#             for i in range(groups)
+#         ])
 
-        self.dim_per_group = in_channels // groups
+#         self.dim_per_group = in_channels // groups
 
-    # Optional helpers
-    @property
-    def e_dim(self):
-        return self.vqs[0].levels[0].e_dim
+#     # Optional helpers
+#     @property
+#     def e_dim(self):
+#         return self.vqs[0].levels[0].e_dim
 
-    @property
-    def n_e(self):
-        return self.vqs[0].levels[0].n_e
+#     @property
+#     def n_e(self):
+#         return self.vqs[0].levels[0].n_e
 
-    @property
-    def codebooks(self):
-        """Return codebooks from all groups (first level only)."""
-        return torch.stack([vq.levels[0].embedding.weight for vq in self.vqs])
+#     @property
+#     def codebooks(self):
+#         """Return codebooks from all groups (first level only)."""
+#         return torch.stack([vq.levels[0].embedding.weight for vq in self.vqs])
 
 
-    # -------------------------------------------------------------------------
-    # Forward pass
-    # -------------------------------------------------------------------------
-    @autocast('cuda', enabled=False)
-    def forward(self, x: torch.Tensor):
-        """
-        Returns:
-            quantized:     (B, C, ...)
-            total_loss:    scalar loss
-            all_outputs:   tuple of:
-                - all_perplexities:  [groups][levels] or None
-                - all_quantized:     [groups][levels]
-                - all_indices:       [groups][levels][..]
-        """
+#     # -------------------------------------------------------------------------
+#     # Forward pass
+#     # -------------------------------------------------------------------------
+#     @autocast('cuda', enabled=False)
+#     def forward(self, x: torch.Tensor):
+#         """
+#         Returns:
+#             quantized:     (B, C, ...)
+#             total_loss:    scalar loss
+#             all_outputs:   tuple of:
+#                 - all_perplexities:  [groups][levels] or None
+#                 - all_quantized:     [groups][levels]
+#                 - all_indices:       [groups][levels][..]
+#         """
 
-        # 1) Split channels into groups
-        x_groups = x.split(self.dim_per_group, dim=self.split_dim)
+#         # 1) Split channels into groups
+#         x_groups = x.split(self.dim_per_group, dim=self.split_dim)
 
-        # 2) Apply VQ to each group independently
-        group_results = []
-        for group_x, vq in zip(x_groups, self.vqs):
-            q, loss, extras = vq(group_x)
-            group_results.append((q, loss, extras))
+#         # 2) Apply VQ to each group independently
+#         group_results = []
+#         for group_x, vq in zip(x_groups, self.vqs):
+#             q, loss, extras = vq(group_x)
+#             group_results.append((q, loss, extras))
 
-        # 3) Unpack results
-        quantized_list   = [r[0] for r in group_results]
-        losses_list      = [r[1] for r in group_results]
-        extras_list      = [r[2] for r in group_results]
+#         # 3) Unpack results
+#         quantized_list   = [r[0] for r in group_results]
+#         losses_list      = [r[1] for r in group_results]
+#         extras_list      = [r[2] for r in group_results]
 
-        # 4) Concatenate quantized outputs across groups
-        quantized = torch.cat(quantized_list, dim=self.split_dim)
+#         # 4) Concatenate quantized outputs across groups
+#         quantized = torch.cat(quantized_list, dim=self.split_dim)
 
-        # 5) Combine losses
-        total_loss = sum(losses_list)
+#         # 5) Combine losses
+#         total_loss = sum(losses_list)
 
-        # 6) Stack metadata cleanly
-        all_perplexities  = [e[0] for e in extras_list]
-        all_quantized_lvls = [e[1] for e in extras_list]
-        all_indices       = [e[2] for e in extras_list]
+#         # 6) Stack metadata cleanly
+#         all_perplexities  = [e[0] for e in extras_list]
+#         all_quantized_lvls = [e[1] for e in extras_list]
+#         all_indices       = [e[2] for e in extras_list]
 
-        return quantized, total_loss, (all_perplexities, all_quantized_lvls, all_indices)
+#         return quantized, total_loss, (all_perplexities, all_quantized_lvls, all_indices)
 
 
 @register_model(f"{_REGISTRY_PREFIX}msrq_vector_quantizer2",
@@ -1508,3 +1508,109 @@ class FiniteScalarQuantizer(nn.Module):
         loss = commitment_loss
 
         return z_q, loss, (perplexity, None, indices)
+
+
+@register_model(f"{_REGISTRY_PREFIX}soft_vector_quantizer",
+                paper_url="https://arxiv.org/pdf/2412.10958v1",
+                code_url="https://github.com/Hhhhhhao/continuous_tokenizer/blob/f4d60a0fefe2ef94253d78333a769cb8d35de477/modelling/quantizers/softvq.py")
+class SoftVectorQuantizer(nn.Module):
+    def __init__(
+        self,
+        n_e,
+        e_dim,
+        entropy_loss_weight=0.01,
+        entropy_loss_temperature=0.01,
+        entropy_gamma=1.0,
+        tau=0.07,
+        use_norm=True,
+    ):
+        super().__init__()
+        self.n_e = n_e
+        self.e_dim = e_dim
+        self.entropy_loss_weight = entropy_loss_weight
+        self.entropy_loss_temperature = entropy_loss_temperature
+        self.entropy_gamma = entropy_gamma
+        self.use_norm = use_norm
+        self.tau = tau
+        
+        # Single embedding layer for all codebooks
+        self.embedding = nn.Parameter(torch.randn(n_e, e_dim))
+        self.embedding.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
+        
+        self.norm = lambda x: F.normalize(x, dim=-1) if use_norm else x
+        
+
+    def forward(self, z):
+        # Handle different input shapes
+        z = z.float()
+
+        # Track original ndim for restoration
+        orig_ndim = z.ndim
+
+        # Put channel last (2D or 3D), same as your VQ
+        if orig_ndim == 4:   # (B, C, H, W) -> (B, H, W, C)
+            z = rearrange(z, 'b c h w -> b h w c')
+        elif orig_ndim == 5: # (B, C, D, H, W) -> (B, D, H, W, C)
+            z = rearrange(z, 'b c d h w -> b d h w c')
+                
+        
+        # Flatten to (N, D)
+        z_flat = z.reshape(-1, self.e_dim)
+        z_flat = self.norm(z_flat)  # optional L2
+        embedding = self.norm(self.embedding) # optional L2
+
+        # ------------------------------------------------------------------
+        # SoftVQ: similarities, softmax over codewords, weighted sum
+        # ------------------------------------------------------------------
+        # Similarity logits: (N, n_e)
+        logits = torch.einsum('bd,nd->bn', z_flat, embedding)  # dot product
+
+        # Softmax over codewords with temperature
+        probs = F.softmax(logits / self.tau, dim=-1)
+
+        # Continuous quantized vector (weighted sum of codewords)
+        # z_q_flat: (N, D)
+        z_q_flat = torch.matmul(probs, embedding)
+
+        # Reshape back to original channel-last shape
+        z_q = z_q_flat.view_as(z)
+        z_q = self.norm(z_q)  # keep same normalization behavior
+        
+        # Calculate cosine similarity
+        # with torch.no_grad():
+        #     zq_z_cos = F.cosine_similarity(
+        #         z.view(-1, self.e_dim),
+        #         z_q.view(-1, self.e_dim),
+        #         dim=-1
+        #     ).mean()
+        
+        # Get indices for usage tracking
+        indices = torch.argmax(probs, dim=-1)  # (N,)
+        
+        # Calculate losses if training
+        # Use entropy loss on the codebook
+        if self.entropy_loss_weight != 0.0 and self.training:
+            per_sample_entropy, avg_entropy = entropy_loss_fn(
+                logits, 
+                self.entropy_loss_temperature,
+                self.entropy_gamma,
+            )
+            entropy_loss = self.entropy_loss_weight * (per_sample_entropy - avg_entropy)
+        else:
+            entropy_loss = torch.tensor(0.0, device=z.device)
+        
+        # Calculate average probabilities  ==> just info no need
+        avg_probs = torch.mean(torch.mean(probs, dim=-1))
+        max_probs = torch.mean(torch.max(probs, dim=-1)[0])
+        
+        # Restore shape (channel-first)
+        if z.ndim == 4:
+            z_q = rearrange(z_q, 'b h w c -> b c h w')
+        elif z.ndim == 5:
+            z_q = rearrange(z_q, 'b d h w c -> b c d h w')
+        
+        return z_q, entropy_loss, (
+            None, # perplexity,
+            None,
+            indices
+        )

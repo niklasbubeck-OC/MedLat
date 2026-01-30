@@ -5,6 +5,32 @@ from typing import Any, Callable, Dict, Iterable, Optional
 
 
 @dataclass(slots=True)
+class ModelInfo:
+    """Display-only metadata for a registered model (no builder)."""
+
+    name: str
+    description: Optional[str] = None
+    code_url: Optional[str] = None
+    paper_url: Optional[str] = None
+    ckpt_path: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __str__(self) -> str:
+        lines = [f"Model: {self.name}"]
+        if self.description:
+            lines.append(f"  description: {self.description}")
+        if self.code_url:
+            lines.append(f"  code_url: {self.code_url}")
+        if self.paper_url:
+            lines.append(f"  paper_url: {self.paper_url}")
+        if self.ckpt_path:
+            lines.append(f"  ckpt_path: {self.ckpt_path}")
+        if self.metadata:
+            lines.append(f"  metadata: {self.metadata}")
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
 class ModelEntry:
     """Metadata container for a registered model."""
 
@@ -13,10 +39,22 @@ class ModelEntry:
     code_url: Optional[str] = None
     description: Optional[str] = None
     paper_url: Optional[str] = None
+    ckpt_path: Optional[str] = None  # Path to original model weights
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def instantiate(self, *args: Any, **kwargs: Any) -> Any:
         return self.builder(*args, **kwargs)
+
+    def to_info(self) -> ModelInfo:
+        """Return display-only info (no builder)."""
+        return ModelInfo(
+            name=self.name,
+            description=self.description,
+            code_url=self.code_url,
+            paper_url=self.paper_url,
+            ckpt_path=self.ckpt_path,
+            metadata=dict(self.metadata),
+        )
 
 
 class ModelRegistry:
@@ -38,6 +76,7 @@ class ModelRegistry:
         code_url: Optional[str] = None,
         description: Optional[str] = None,
         paper_url: Optional[str] = None,
+        ckpt_path: Optional[str] = None,
         override: bool = False,
     ) -> ModelEntry:
         key = self._normalize(name)
@@ -49,6 +88,7 @@ class ModelRegistry:
             code_url=code_url,
             description=description,
             paper_url=paper_url,
+            ckpt_path=ckpt_path,
             metadata=metadata or {},
         )
         self._registry[key] = entry
@@ -62,6 +102,10 @@ class ModelRegistry:
             raise KeyError(
                 f"Unknown model '{name}'. Available models: {sorted(self._registry)}"
             ) from exc
+
+    def get_info(self, name: str) -> ModelInfo:
+        """Return display-only metadata for a model (no builder)."""
+        return self.get(name).to_info()
 
     def create(self, name: str, *args: Any, **kwargs: Any) -> Any:
         return self.get(name).instantiate(*args, **kwargs)
@@ -84,6 +128,7 @@ def register_model(
     code_url: Optional[str] = None,
     description: Optional[str] = None,
     paper_url: Optional[str] = None,
+    ckpt_path: Optional[str] = None,
     override: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
@@ -98,6 +143,7 @@ def register_model(
             code_url=code_url,
             description=description,
             paper_url=paper_url,
+            ckpt_path=ckpt_path,
             override=override,
         )
         return fn
@@ -110,6 +156,11 @@ def register_model(
 def get_model(name: str, *args: Any, **kwargs: Any) -> Any:
     """Instantiate a registered model."""
     return MODEL_REGISTRY.create(name, *args, **kwargs)
+
+
+def get_model_info(name: str) -> ModelInfo:
+    """Return display-only metadata for a registered model (no builder)."""
+    return MODEL_REGISTRY.get_info(name)
 
 
 def available_models(prefix: Optional[str] = None) -> Iterable[str]:

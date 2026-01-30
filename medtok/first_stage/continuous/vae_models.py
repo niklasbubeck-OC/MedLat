@@ -11,6 +11,22 @@ __all__ = [
 ]
 
 
+class _DeterministicPosterior:
+    """Posterior when encoder outputs z directly (double_z=False, no Gaussian)."""
+
+    def __init__(self, z: torch.Tensor):
+        self.z = z
+
+    def sample(self) -> torch.Tensor:
+        return self.z
+
+    def mode(self) -> torch.Tensor:
+        return self.z
+
+    def kl(self) -> torch.Tensor:
+        return torch.zeros((), device=self.z.device, dtype=self.z.dtype)
+
+
 class AutoencoderKL(nn.Module):
     def __init__(self,
                  encoder: nn.Module,
@@ -18,6 +34,8 @@ class AutoencoderKL(nn.Module):
                  alignment: AlignmentModule = None,
                  embed_dim: int = None,
                  kl_weight: float = 1e-6,
+                 use_quant_conv: bool = True,
+                 double_z: bool = True,
                  ckpt_path: str = None):
         super().__init__()
         self.dims = getattr(encoder, "dims", 2)
@@ -26,7 +44,8 @@ class AutoencoderKL(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
         self.alignment = alignment
-        
+        self.double_z = double_z
+
         self.encoder_z_channels = getattr(encoder, "z_channels", None)
         if self.encoder_z_channels is None:
             raise ValueError(f"Encoder {encoder.__class__.__name__} must define z_channels.")
@@ -38,10 +57,15 @@ class AutoencoderKL(nn.Module):
         self.kl_weight = kl_weight
         if embed_dim is None:
             embed_dim = self.encoder_z_channels
-
-        self.quant_conv = conv_layer(2 * self.encoder_z_channels, 2 * embed_dim, 1)
-        self.post_quant_conv = conv_layer(embed_dim, self.encoder_z_channels, 1)
         self.embed_dim = embed_dim
+
+        if use_quant_conv:
+            self.quant_conv = conv_layer(2 * self.encoder_z_channels, 2 * embed_dim, 1)
+            self.post_quant_conv = conv_layer(embed_dim, self.encoder_z_channels, 1)
+        else:
+            # Match checkpoints that omit quant_conv/post_quant_conv (e.g. pretrained DCAE)
+            self.quant_conv = nn.Identity()
+            self.post_quant_conv = nn.Identity()
 
         if ckpt_path is not None:
             init_from_ckpt(self, ckpt_path)
@@ -50,6 +74,9 @@ class AutoencoderKL(nn.Module):
     def get_posterior(self, x):
         h = self.encoder(x)
         moments = self.quant_conv(h)
+        if not self.double_z:
+            # Encoder outputs z directly (e.g. pretrained DCAE); no Gaussian
+            return _DeterministicPosterior(moments)
         posterior = DiagonalGaussianDistribution(moments)
         return posterior
 
@@ -78,7 +105,10 @@ class AutoencoderKL(nn.Module):
 
     def forward(self, input, sample_posterior=True):
         posterior = self.get_posterior(input)
-        p_loss = self.p_loss(posterior, input.device)
+        if self.double_z:
+            p_loss = self.p_loss(posterior, input.device)
+        else:
+            p_loss = torch.zeros((), device=input.device)
         if sample_posterior:
             z = posterior.sample()
         else:

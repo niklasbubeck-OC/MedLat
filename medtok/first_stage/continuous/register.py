@@ -1,5 +1,6 @@
 from medtok.first_stage.continuous.modules.ldm_modules import Encoder as LDMEncoder, Decoder as LDMDecoder
 from medtok.first_stage.continuous.modules.maisi_modules import MaisiEncoder, MaisiDecoder
+from medtok.first_stage.continuous.modules.dcae_modules.dcae_modules import DCAEEncoder, DCAEDecoder
 from medtok.registry import register_model
 from medtok.first_stage.continuous.vae_models import AutoencoderKL
 from medtok.modules.alignments import *
@@ -409,3 +410,183 @@ def VAVAE_f16_d64_dinov2(
     dropout=0.0,
     **kwargs):
     return VAVAE_f16_d16_dinov2(img_size=img_size, dims=dims, double_z=double_z, z_channels=z_channels, in_channels=in_channels, out_ch=out_ch, ch=ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks, attn_resolutions=attn_resolutions, dropout=dropout, **kwargs)
+
+
+@register_model(
+    f"continuous.dcae.f32c32",
+    code_url="https://github.com/mit-han-lab/efficientvit",
+    paper_url="https://arxiv.org/pdf/2410.10733",
+    ckpt_path="https://huggingface.co/mit-han-lab/dc-ae-f32c32-in-1.0/resolve/main/model.safetensors",
+)
+def DCAE_f32c32(
+    img_size=256,
+    dims=2,
+    in_channels=3,
+    z_channels=32,
+    width_list=(128, 256, 512, 512, 1024, 1024),
+    depth_list=(0, 4, 8, 2, 2, 2),
+    block_type=["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU"],
+    norm="trms2d",
+    act="silu",
+    decoder_norm=["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d"],
+    decoder_act=["relu", "relu", "relu", "silu", "silu", "silu"],
+    decoder_depth_list=(0, 5, 10, 2, 2, 2),
+    double_z=False,
+    use_quant_conv=False,
+    project_out_conv_only=True,
+    **kwargs):
+    """
+    DCAE with compression factor 32 and 32 latent channels.
+    double_z=False, use_quant_conv=False and project_out_conv_only=True match pretrained DCAE checkpoint keys.
+    Args:
+        dims (int): Number of dimensions (2 for 2D, 3 for 3D)
+    """
+    encoder = DCAEEncoder(
+        in_channels=in_channels,
+        z_channels=z_channels,
+        width_list=width_list,
+        depth_list=depth_list,
+        block_type=block_type,
+        norm=norm,
+        act=act,
+        double_z=double_z,
+        dims=dims,
+        img_size=img_size,
+        project_out_conv_only=project_out_conv_only,
+    )
+    decoder = DCAEDecoder(
+        in_channels=in_channels,
+        z_channels=z_channels,
+        width_list=width_list,
+        depth_list=decoder_depth_list,
+        block_type=block_type,
+        norm=decoder_norm,
+        act=decoder_act,
+        dims=dims,
+        img_size=img_size,
+    )
+    return AutoencoderKL(
+        encoder=encoder,
+        decoder=decoder,
+        use_quant_conv=use_quant_conv,
+        double_z=double_z,
+        **kwargs,
+    )
+
+
+@register_model(
+    f"continuous.dcae.f64c128",
+    code_url="https://github.com/mit-han-lab/efficientvit",
+    paper_url="https://arxiv.org/pdf/2410.10733",
+    ckpt_path="https://huggingface.co/mit-han-lab/dc-ae-f64c128-in-1.0/resolve/main/model.safetensors",
+)
+def DCAE_f64c128(
+    img_size=256,
+    dims=2,
+    in_channels=3,
+    z_channels=128,
+    width_list=(128, 256, 512, 512, 1024, 1024, 2048),
+    depth_list=(0, 4, 8, 2, 2, 2, 2),
+    block_type=["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"],
+    norm="trms2d",
+    act="silu",
+    decoder_norm=["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d", "trms2d"],
+    decoder_act=["relu", "relu", "relu", "silu", "silu", "silu", "silu"],
+    decoder_depth_list=(0, 5, 10, 2, 2, 2, 2),
+    double_z=False,
+    use_quant_conv=False,
+    project_out_conv_only=True,
+    **kwargs):
+    """
+    DCAE with compression factor 64 and 128 latent channels
+    """
+    encoder = DCAEEncoder(
+        in_channels=in_channels,
+        z_channels=z_channels,
+        width_list=width_list,
+        depth_list=depth_list,
+        block_type=block_type,
+        norm=norm,
+        act=act,
+        double_z=double_z,
+        dims=dims,
+        img_size=img_size,
+        project_out_conv_only=project_out_conv_only,
+    )
+    decoder = DCAEDecoder(
+        in_channels=in_channels,
+        z_channels=z_channels,
+        width_list=width_list,
+        depth_list=decoder_depth_list,
+        block_type=block_type,
+        norm=decoder_norm,
+        act=decoder_act,
+        dims=dims,
+        img_size=img_size,
+    )
+    return AutoencoderKL(
+        encoder=encoder, 
+        decoder=decoder,
+        double_z=double_z,
+        use_quant_conv=use_quant_conv,
+        **kwargs,
+    )
+
+
+@register_model(
+    f"continuous.dcae.f128c512",
+    code_url="https://github.com/mit-han-lab/efficientvit",
+    paper_url="https://arxiv.org/pdf/2410.10733",
+    ckpt_path="https://huggingface.co/mit-han-lab/dc-ae-f128c512-in-1.0/resolve/main/model.safetensors",
+)
+def DCAE_f128c512(
+    img_size=256,
+    dims=2,
+    in_channels=3,
+    z_channels=512,
+    width_list=(128, 256, 512, 512, 1024, 1024, 2048, 2048),
+    depth_list=(0, 4, 8, 2, 2, 2, 2, 2),
+    block_type=["ResBlock", "ResBlock", "ResBlock", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU", "EViT_GLU"],
+    norm="trms2d",
+    act="silu",
+    decoder_norm=["bn2d", "bn2d", "bn2d", "trms2d", "trms2d", "trms2d", "trms2d", "trms2d"],
+    decoder_act=["relu", "relu", "relu", "silu", "silu", "silu", "silu", "silu"],
+    decoder_depth_list=(0, 5, 10, 2, 2, 2, 2, 2),
+    double_z=False,
+    use_quant_conv=False,
+    project_out_conv_only=True,
+    **kwargs):
+    """
+    DCAE with compression factor 128 and 512 latent channels
+    """
+    encoder = DCAEEncoder(
+        in_channels=in_channels,
+        z_channels=z_channels,
+        width_list=width_list,
+        depth_list=depth_list,
+        block_type=block_type,
+        norm=norm,
+        act=act,
+        double_z=double_z,
+        dims=dims,
+        img_size=img_size,
+        project_out_conv_only=project_out_conv_only,
+    )
+    decoder = DCAEDecoder(
+        in_channels=in_channels,
+        z_channels=z_channels,
+        width_list=width_list,
+        depth_list=decoder_depth_list,
+        block_type=block_type,
+        norm=decoder_norm,
+        act=decoder_act,
+        dims=dims,
+        img_size=img_size,
+        )
+    return AutoencoderKL(
+        encoder=encoder,
+        decoder=decoder,
+        double_z=double_z,
+        use_quant_conv=use_quant_conv,
+        **kwargs,
+    )

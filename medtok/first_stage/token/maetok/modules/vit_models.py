@@ -289,7 +289,7 @@ class MAETokViTEncoder(nn.Module):
         self.patch_size = patch_size
         self.embed_dim = embed_dim
         self.num_prefix_tokens = 1  # CLS token
-        
+        self.z_channels = embed_dim
         # Patch embedding
         self.patch_embed = PatchEmbed(to_embed='conv', img_size=img_size, patch_size=patch_size, 
                                      in_chans=in_channels, embed_dim=embed_dim)
@@ -298,21 +298,8 @@ class MAETokViTEncoder(nn.Module):
         # Position embedding - use sinusoidal from pos_embed.py
         self.use_ape = use_ape
         if self.use_ape:
-            # Calculate grid size for position embedding
-            if isinstance(img_size, int):
-                grid_size = img_size // patch_size
-            elif len(img_size) == 2:
-                grid_size = (img_size[0] // patch_size, img_size[1] // patch_size)
-            else:  # 3D
-                grid_size = tuple(s // p for s, p in zip(img_size, patch_size))
-            
-            pos_embed = get_sincos_pos_embed(
-                dim=embed_dim,
-                grid_size=grid_size,
-                dims=self.patch_embed.dims,
-                cls_token=True
-            )
-            self.pos_embed = nn.Parameter(pos_embed.unsqueeze(0), requires_grad=False)
+            self.pos_embed = nn.Parameter(torch.zeros(1,self.num_img_tokens + self.num_prefix_tokens, embed_dim))
+            nn.init.trunc_normal_(self.pos_embed, std=0.02)
         else:
             self.pos_embed = None
         
@@ -549,21 +536,8 @@ class MAETokViTDecoder(nn.Module):
         # Position embedding - use sinusoidal from pos_embed.py
         self.use_ape = use_ape
         if self.use_ape:
-            # Calculate grid size for position embedding
-            if isinstance(img_size, int):
-                grid_size = img_size // patch_size
-            elif len(img_size) == 2:
-                grid_size = (img_size[0] // patch_size, img_size[1] // patch_size)
-            else:  # 3D
-                grid_size = tuple(s // p for s, p in zip(img_size, patch_size))
-            
-            pos_embed = get_sincos_pos_embed(
-                dim=embed_dim,
-                grid_size=grid_size,
-                dims=self.dims,
-                cls_token=cls_token
-            )
-            self.pos_embed = nn.Parameter(pos_embed.unsqueeze(0), requires_grad=False)
+            self.pos_embed = nn.Parameter(torch.zeros(1,self.num_img_tokens + self.num_prefix_tokens, embed_dim))
+            nn.init.trunc_normal_(self.pos_embed, std=0.02)
         else:
             self.pos_embed = None
 
