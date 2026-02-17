@@ -31,9 +31,19 @@ except ImportError:
 
 
 def build_block(
-    block_type: str, in_channels: int, out_channels: int, norm: Optional[str], act: Optional[str]
+    block_type: str,
+    in_channels: int,
+    out_channels: int,
+    norm: Optional[str],
+    act: Optional[str],
+    dims: int = 2,
 ) -> nn.Module:
-    """Build a single block (ResBlock or EfficientViTBlock)."""
+    """Build a single block (ResBlock or EfficientViTBlock). EfficientViT blocks are 2D only.
+
+    EViT_GLU / EViTS5_GLU use EfficientViTBlock: LiteMLA (lightweight linear attention over
+    spatial dim, with Q,K,V from convs) + GLUMBConv (convolutions with GLU). Not a
+    standard Vision Transformer backbone; see EfficientViTBlock docstring in nn.ops.
+    """
     if block_type == "ResBlock":
         assert in_channels == out_channels
         main_block = ResBlock(
@@ -44,12 +54,17 @@ def build_block(
             use_bias=(True, False),
             norm=(None, norm),
             act_func=(act, None),
+            dims=dims,
         )
         block = ResidualBlock(main_block, IdentityLayer())
     elif block_type == "EViT_GLU":
+        if dims != 2:
+            raise ValueError("EfficientViT blocks (EViT_GLU, EViTS5_GLU) are only supported for 2D (dims=2). Use ResBlock for 3D.")
         assert in_channels == out_channels
         block = EfficientViTBlock(in_channels, norm=norm, act_func=act, local_module="GLUMBConv", scales=())
     elif block_type == "EViTS5_GLU":
+        if dims != 2:
+            raise ValueError("EfficientViT blocks (EViT_GLU, EViTS5_GLU) are only supported for 2D (dims=2). Use ResBlock for 3D.")
         assert in_channels == out_channels
         block = EfficientViTBlock(in_channels, norm=norm, act_func=act, local_module="GLUMBConv", scales=(5,))
     else:
@@ -58,7 +73,13 @@ def build_block(
 
 
 def build_stage_main(
-    width: int, depth: int, block_type: Union[str, List[str]], norm: str, act: str, input_width: int
+    width: int,
+    depth: int,
+    block_type: Union[str, List[str]],
+    norm: str,
+    act: str,
+    input_width: int,
+    dims: int = 2,
 ) -> List[nn.Module]:
     """Build the main blocks for a stage."""
     assert isinstance(block_type, str) or (isinstance(block_type, list) and depth == len(block_type))
@@ -71,12 +92,19 @@ def build_stage_main(
             out_channels=width,
             norm=norm,
             act=act,
+            dims=dims,
         )
         stage.append(block)
     return stage
 
 
-def build_downsample_block(block_type: str, in_channels: int, out_channels: int, shortcut: Optional[str]) -> nn.Module:
+def build_downsample_block(
+    block_type: str,
+    in_channels: int,
+    out_channels: int,
+    shortcut: Optional[str],
+    dims: int = 2,
+) -> nn.Module:
     """Build a downsampling block."""
     if block_type == "Conv":
         block = ConvLayer(
@@ -87,19 +115,20 @@ def build_downsample_block(block_type: str, in_channels: int, out_channels: int,
             use_bias=True,
             norm=None,
             act_func=None,
+            dims=dims,
         )
     elif block_type == "ConvPixelUnshuffle":
         block = ConvPixelUnshuffleDownSampleLayer(
-            in_channels=in_channels, out_channels=out_channels, kernel_size=3, factor=2
+            in_channels=in_channels, out_channels=out_channels, kernel_size=3, factor=2, dims=dims
         )
     else:
         raise ValueError(f"block_type {block_type} is not supported for downsampling")
-    
+
     if shortcut is None:
         pass
     elif shortcut == "averaging":
         shortcut_block = PixelUnshuffleChannelAveragingDownSampleLayer(
-            in_channels=in_channels, out_channels=out_channels, factor=2
+            in_channels=in_channels, out_channels=out_channels, factor=2, dims=dims
         )
         block = ResidualBlock(block, shortcut_block)
     else:
@@ -107,24 +136,30 @@ def build_downsample_block(block_type: str, in_channels: int, out_channels: int,
     return block
 
 
-def build_upsample_block(block_type: str, in_channels: int, out_channels: int, shortcut: Optional[str]) -> nn.Module:
+def build_upsample_block(
+    block_type: str,
+    in_channels: int,
+    out_channels: int,
+    shortcut: Optional[str],
+    dims: int = 2,
+) -> nn.Module:
     """Build an upsampling block."""
     if block_type == "ConvPixelShuffle":
         block = ConvPixelShuffleUpSampleLayer(
-            in_channels=in_channels, out_channels=out_channels, kernel_size=3, factor=2
+            in_channels=in_channels, out_channels=out_channels, kernel_size=3, factor=2, dims=dims
         )
     elif block_type == "InterpolateConv":
         block = InterpolateConvUpSampleLayer(
-            in_channels=in_channels, out_channels=out_channels, kernel_size=3, factor=2
+            in_channels=in_channels, out_channels=out_channels, kernel_size=3, factor=2, dims=dims
         )
     else:
         raise ValueError(f"block_type {block_type} is not supported for upsampling")
-    
+
     if shortcut is None:
         pass
     elif shortcut == "duplicating":
         shortcut_block = ChannelDuplicatingPixelUnshuffleUpSampleLayer(
-            in_channels=in_channels, out_channels=out_channels, factor=2
+            in_channels=in_channels, out_channels=out_channels, factor=2, dims=dims
         )
         block = ResidualBlock(block, shortcut_block)
     else:
@@ -202,6 +237,7 @@ class DCAEEncoder(nn.Module):
                 use_bias=True,
                 norm=None,
                 act_func=None,
+                dims=self.dims,
             )
         elif project_in_factor == 2:
             self.project_in = build_downsample_block(
@@ -209,6 +245,7 @@ class DCAEEncoder(nn.Module):
                 in_channels=in_channels,
                 out_channels=project_in_out_channels,
                 shortcut=None,
+                dims=self.dims,
             )
         else:
             raise ValueError(f"downsample factor {project_in_factor} is not supported for encoder project in")
@@ -218,7 +255,13 @@ class DCAEEncoder(nn.Module):
         for stage_id, (width, depth) in enumerate(zip(width_list, depth_list)):
             current_block_type = block_type[stage_id] if isinstance(block_type, list) else block_type
             stage_blocks = build_stage_main(
-                width=width, depth=depth, block_type=current_block_type, norm=norm, act=act, input_width=width
+                width=width,
+                depth=depth,
+                block_type=current_block_type,
+                norm=norm,
+                act=act,
+                input_width=width,
+                dims=self.dims,
             )
 
             if stage_id < self.num_stages - 1 and depth > 0:
@@ -227,9 +270,10 @@ class DCAEEncoder(nn.Module):
                     in_channels=width,
                     out_channels=width_list[stage_id + 1] if downsample_match_channel else width,
                     shortcut=downsample_shortcut,
+                    dims=self.dims,
                 )
                 stage_blocks.append(downsample_block)
-            
+
             self.stages.append(OpSequential(stage_blocks))
 
         # Project out
@@ -245,11 +289,12 @@ class DCAEEncoder(nn.Module):
                     use_bias=True,
                     norm=None,
                     act_func=None,
+                    dims=self.dims,
                 ),
             ]
         else:
             project_out_layers = [
-                build_norm(out_norm) if out_norm else IdentityLayer(),
+                build_norm(out_norm, num_features=width_list[-1], dims=self.dims) if out_norm else IdentityLayer(),
                 build_act(out_act) if out_act else IdentityLayer(),
                 ConvLayer(
                     in_channels=width_list[-1],
@@ -259,12 +304,13 @@ class DCAEEncoder(nn.Module):
                     use_bias=True,
                     norm=None,
                     act_func=None,
+                    dims=self.dims,
                 ),
             ]
-        
+
         if out_shortcut == "averaging":
             shortcut_block = PixelUnshuffleChannelAveragingDownSampleLayer(
-                in_channels=width_list[-1], out_channels=out_channels, factor=1
+                in_channels=width_list[-1], out_channels=out_channels, factor=1, dims=self.dims
             )
             self.project_out = ResidualBlock(OpSequential(project_out_layers), shortcut_block)
         else:
@@ -357,11 +403,12 @@ class DCAEDecoder(nn.Module):
             use_bias=True,
             norm=None,
             act_func=None,
+            dims=self.dims,
         )
-        
+
         if in_shortcut == "duplicating":
             shortcut_block = ChannelDuplicatingPixelUnshuffleUpSampleLayer(
-                in_channels=z_channels, out_channels=width_list[-1], factor=1
+                in_channels=z_channels, out_channels=width_list[-1], factor=1, dims=self.dims
             )
             self.project_in = ResidualBlock(project_in_block, shortcut_block)
         else:
@@ -378,13 +425,14 @@ class DCAEDecoder(nn.Module):
                     in_channels=width_list[stage_id + 1],
                     out_channels=width if upsample_match_channel else width_list[stage_id + 1],
                     shortcut=upsample_shortcut,
+                    dims=self.dims,
                 )
                 stage_blocks.append(upsample_block)
 
             current_block_type = block_type[stage_id] if isinstance(block_type, list) else block_type
             current_norm = norm[stage_id] if isinstance(norm, list) else norm
             current_act = act[stage_id] if isinstance(act, list) else act
-            
+
             stage_blocks.extend(
                 build_stage_main(
                     width=width,
@@ -395,6 +443,7 @@ class DCAEDecoder(nn.Module):
                     input_width=(
                         width if upsample_match_channel else width_list[min(stage_id + 1, self.num_stages - 1)]
                     ),
+                    dims=self.dims,
                 )
             )
             self.stages.insert(0, OpSequential(stage_blocks))
@@ -406,10 +455,10 @@ class DCAEDecoder(nn.Module):
         project_out_in_channels = width_list[0] if depth_list[0] > 0 else width_list[1]
         
         project_out_layers = [
-            build_norm(out_norm, project_out_in_channels) if out_norm else IdentityLayer(),
+            build_norm(out_norm, num_features=project_out_in_channels, dims=self.dims) if out_norm else IdentityLayer(),
             build_act(out_act) if out_act else IdentityLayer(),
         ]
-        
+
         if project_out_factor == 1:
             project_out_layers.append(
                 ConvLayer(
@@ -420,6 +469,7 @@ class DCAEDecoder(nn.Module):
                     use_bias=True,
                     norm=None,
                     act_func=None,
+                    dims=self.dims,
                 )
             )
         elif project_out_factor == 2:
@@ -429,6 +479,7 @@ class DCAEDecoder(nn.Module):
                     in_channels=project_out_in_channels,
                     out_channels=in_channels,
                     shortcut=None,
+                    dims=self.dims,
                 )
             )
         else:

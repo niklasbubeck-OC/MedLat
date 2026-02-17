@@ -530,8 +530,9 @@ class MAETokViTDecoder(nn.Module):
         nn.init.normal_(self.mask_token, std=0.02)
 
         # Latent position embedding
-        self.latent_pos_embed = nn.Parameter(torch.zeros(1, self.num_latent_tokens, embed_dim))
-        nn.init.trunc_normal_(self.latent_pos_embed, std=0.02)
+        if self.num_latent_tokens:
+            self.latent_pos_embed = nn.Parameter(torch.zeros(1, self.num_latent_tokens, embed_dim))
+            nn.init.trunc_normal_(self.latent_pos_embed, std=0.02)
 
         # Position embedding - use sinusoidal from pos_embed.py
         self.use_ape = use_ape
@@ -640,9 +641,13 @@ class MAETokViTDecoder(nn.Module):
             x = x + self.pos_embed[:, :num_img_tokens]
         x = self.pos_drop(x)
 
-        # Add latent tokens with position embedding
-        z = z + self.latent_pos_embed
-        x = torch.cat([x, z], dim=1)
+        if self.num_latent_tokens:
+            # Add latent tokens with position embedding
+            z = z + self.latent_pos_embed
+            x = torch.cat([x, z], dim=1)
+
+        if self.cls_token is not None:
+            x = torch.cat([self.cls_token.expand(B, -1, -1), x], dim=1)
 
         # Forward through transformer blocks
         if self.use_ape:

@@ -24,17 +24,70 @@ class TritonRMSNorm2d(nn.LayerNorm):
         return TritonRMSNorm2dFunc.apply(x, self.weight, self.bias, self.eps)
 
 
+class LayerNorm3d(nn.Module):
+    """Channel-wise LayerNorm for 5D (B, C, D, H, W); same logic as LayerNorm2d with 5D view."""
+
+    def __init__(self, normalized_shape: int, eps: float = 1e-5, elementwise_affine: bool = True):
+        super().__init__()
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(normalized_shape))
+            self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = x - torch.mean(x, dim=1, keepdim=True)
+        out = out / torch.sqrt(torch.square(out).mean(dim=1, keepdim=True) + self.eps)
+        if self.elementwise_affine:
+            # (1, C, 1, 1, 1) for 5D
+            view = (1, -1) + (1,) * (x.dim() - 2)
+            out = out * self.weight.view(view) + self.bias.view(view)
+        return out
+
+
+class RMSNorm3d(nn.Module):
+    """RMSNorm for 5D (B, C, D, H, W); channel-wise, no Triton (fallback for 3D)."""
+
+    def __init__(self, normalized_shape: int, eps: float = 1e-6, elementwise_affine: bool = True):
+        super().__init__()
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(normalized_shape))
+            self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        else:
+            self.register_parameter("weight", None)
+            self.register_parameter("bias", None)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        rms = torch.sqrt(torch.mean(x * x, dim=1, keepdim=True) + self.eps)
+        out = x / rms
+        if self.elementwise_affine:
+            view = (1, -1) + (1,) * (x.dim() - 2)
+            out = out * self.weight.view(view) + self.bias.view(view)
+        return out
+
+
 # register normalization function here
 REGISTERED_NORM_DICT: dict[str, type] = {
     "bn2d": nn.BatchNorm2d,
+    "bn3d": nn.BatchNorm3d,
     "ln": nn.LayerNorm,
     "ln2d": LayerNorm2d,
+    "ln3d": LayerNorm3d,
     "trms2d": TritonRMSNorm2d,
+    "trms3d": RMSNorm3d,
 }
 
 
-def build_norm(name="bn2d", num_features=None, **kwargs) -> Optional[nn.Module]:
-    if name in ["ln", "ln2d", "trms2d"]:
+def build_norm(name="bn2d", num_features=None, dims=2, **kwargs) -> Optional[nn.Module]:
+    # Map 2d norm names to 3d when dims=3 (so configs can keep "trms2d" etc.)
+    if dims == 3 and name in ("bn2d", "ln2d", "trms2d"):
+        name = {"bn2d": "bn3d", "ln2d": "ln3d", "trms2d": "trms3d"}[name]
+    if name in ["ln", "ln2d", "ln3d", "trms2d", "trms3d"]:
         kwargs["normalized_shape"] = num_features
     else:
         kwargs["num_features"] = num_features

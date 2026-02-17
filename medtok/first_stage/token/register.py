@@ -778,3 +778,4 @@ def SoftVQ_L_T64_D32(
     )
     alignment = DinoAlignment(decoder=aux_dino_decoder, codebook_embed_dim=e_dim, img_size=img_size)
     return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, alignment=alignment, pre_post_layer="linear", **kwargs)
+

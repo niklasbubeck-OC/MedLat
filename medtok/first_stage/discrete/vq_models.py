@@ -60,6 +60,9 @@ class VQModel(nn.Module):
 
     def encode(self, x):
         h = self.encoder(x)
+        # Allow encoders that return (features, aux)
+        if isinstance(h, tuple):
+            h = h[0]
         h = self.quant_conv(h)
         quant, emb_loss, info = self.quantizer(h)
         return quant, emb_loss, info
@@ -70,6 +73,8 @@ class VQModel(nn.Module):
     
     def encode_to_prequant(self, x):
         h = self.encoder(x)
+        if isinstance(h, tuple):
+            h = h[0]
         h = self.quant_conv(h)
         return h, None, None
 
@@ -115,7 +120,10 @@ class VQModel(nn.Module):
     def img_to_idxBl(self, inp_img_no_grad: torch.Tensor, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None) -> List[torch.LongTensor]:
         """Convert image to multi-scale indices"""
         self._check_msrq_features('img_to_idxBl')
-        f = self.quant_conv(self.encoder(inp_img_no_grad))
+        h = self.encoder(inp_img_no_grad)
+        if isinstance(h, tuple):
+            h = h[0]
+        f = self.quant_conv(h)
         return self.quantizer.f_to_idxBl_or_fhat(f, to_fhat=False, v_patch_nums=v_patch_nums)
     
     def idxBl_to_img(self, ms_idx_Bl: List[torch.Tensor], same_shape: bool, last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
@@ -140,7 +148,10 @@ class VQModel(nn.Module):
     def img_to_reconstructed_img(self, x, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None, last_one=False) -> List[torch.Tensor]:
         """Convert image to reconstructed image at multiple scales"""
         self._check_msrq_features('img_to_reconstructed_img')
-        f = self.quant_conv(self.encoder(x))
+        h = self.encoder(x)
+        if isinstance(h, tuple):
+            h = h[0]
+        f = self.quant_conv(h)
         ls_f_hat_BChw = self.quantizer.f_to_idxBl_or_fhat(f, to_fhat=True, v_patch_nums=v_patch_nums)
         if last_one:
             return self.decoder(self.post_quant_conv(ls_f_hat_BChw[-1])).clamp_(-1, 1)

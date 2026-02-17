@@ -5,6 +5,8 @@ from medtok.first_stage.discrete.modules.ldm_modules import Encoder, Decoder
 from medtok.first_stage.discrete.vq_models import VQModel
 from medtok.first_stage.discrete.quantizer import *
 from medtok.modules.alignments import *
+from medtok.first_stage.token.maetok.modules.vit_models import MAETokViTEncoder, MAETokViTDecoder
+from medtok.modules.vit_core import GenericViTEncoder, GenericViTDecoder
 
 @register_model("discrete.vq.f4_d3_e8192")
 def VQ_f4_d3_e8192(
@@ -2118,3 +2120,72 @@ def SoftVQ_f4_d3_e8192(
     )
     alignment = VFFoundationAlignment(latent_channels=z_channels, foundation_type="dinov2")
     return VQModel(encoder, decoder, quantizer, alignment=alignment, **kwargs)
+
+
+@register_model(f"discrete.transformer.rqvae.s_16")
+def RQVAE_Transformer_S_16(
+    img_size: int = 256,
+    patch_size: int = 16,
+    in_channels: int = 3,
+    embed_dim_encoder: int = 384,
+    embed_dim_decoder: int = 384,
+    depth_encoder: int = 12,
+    depth_decoder: int = 12,
+    num_heads_encoder: int = 6,
+    num_heads_decoder: int = 6,
+    mlp_ratio: float = 4.0,
+    # --- quantizer config ---
+    quantizer_class=VectorQuantizer2,
+    num_quantizers=4,
+    n_e=16384,
+    e_dim=32,
+    beta=0.25,
+    shared_codebook=True,
+    quantize_dropout=False,
+    dropout_start_level=0,
+    **kwargs
+    ):
+
+    encoder = GenericViTEncoder(
+        img_size=img_size,
+        patch_size=patch_size,
+        in_channels=in_channels,
+        embed_dim=embed_dim_encoder,
+        depth=depth_encoder,
+        num_heads=num_heads_encoder,
+        mlp_ratio=mlp_ratio,
+        pos_type="learned",
+        use_rope=True,
+        num_prefix_tokens=1,
+        num_latent_tokens=0,
+    )
+    decoder = GenericViTDecoder(
+        img_size=img_size,
+        patch_size=patch_size,
+        out_channels=in_channels,
+        embed_dim=embed_dim_decoder,
+        depth=depth_decoder,
+        num_heads=num_heads_decoder,
+        mlp_ratio=mlp_ratio,
+        pos_type="learned",
+        use_rope=True,
+        num_prefix_tokens=1,
+        num_latent_tokens=0,
+        to_pixel="conv",
+        token_dim=None,
+    )
+    quantizer = ResidualQuantizer(
+        quantizer_class=quantizer_class,
+        num_quantizers=num_quantizers,
+        quantizer_kwargs_list=[
+            {
+                "n_e": n_e,
+                "e_dim": e_dim,
+                "beta": beta,
+            }
+        ] * num_quantizers,
+        shared_codebook=shared_codebook,
+        quantize_dropout=quantize_dropout,
+        dropout_start_level=dropout_start_level,
+    )
+    return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, pre_post_layer="linear", **kwargs)

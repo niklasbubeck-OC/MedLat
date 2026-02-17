@@ -313,6 +313,7 @@ class Decoder(nn.Module):
         elif dims == 3 and use_rope:
             head_dim = self.transformer[0].attn.head_dim
             rope_tensor = get_rope_tensor_3d(head_dim, self.grid_size[0], self.grid_size[1], self.grid_size[2]).unsqueeze(0)
+            print(rope_tensor.shape)
             self.register_buffer("rope_tensor", rope_tensor, persistent=False)
         else:
             self.register_buffer("rope_tensor", None, persistent=False)
@@ -357,7 +358,7 @@ class DeTok(nn.Module):
     """
     def __init__(
         self,
-        image_size: int | tuple[int, ...] = 256,
+        img_size: int | tuple[int, ...] = 256,
         patch_size: int | tuple[int, ...] = 16,
         in_channels: int = 3,
         out_channels: int = 3,
@@ -384,7 +385,7 @@ class DeTok(nn.Module):
 
         # initialize encoder and decoder
         self.encoder = Encoder(
-            img_size=image_size,
+            img_size=img_size,
             patch_size=patch_size,
             in_channels=in_channels,
             width=enc_width,
@@ -396,7 +397,7 @@ class DeTok(nn.Module):
             use_rope=use_rope,
         )
         self.decoder = Decoder(
-            img_size=image_size,
+            img_size=img_size,
             patch_size=patch_size,
             out_channels=out_channels,
             width=dec_width,
@@ -409,18 +410,18 @@ class DeTok(nn.Module):
 
         # model configuration
         self.dims = dims
-        self.image_size = image_size
+        self.img_size = img_size
         self.patch_size = patch_size
         self.kl_weight = kl_weight
         
         # Calculate grid sizes for tokenization
-        if isinstance(image_size, int):
+        if isinstance(img_size, int):
             if dims == 2:
-                self.img_size = (image_size, image_size)
+                self.img_size = (img_size, img_size)
             elif dims == 3:
-                self.img_size = (image_size, image_size, image_size)
+                self.img_size = (img_size, img_size, img_size)
         else:
-            self.img_size = image_size
+            self.img_size = img_size
             
         if isinstance(patch_size, int):
             if dims == 2:

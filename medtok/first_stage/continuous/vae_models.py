@@ -4,27 +4,11 @@ import numpy as np
 from medtok.utils import init_from_ckpt
 from medtok.modules.alignments import AlignmentModule
 from medtok.first_stage.continuous.modules.ldm_modules import get_conv_layer
-from medtok.first_stage.modules.gaussian_dist import DiagonalGaussianDistribution
+from medtok.first_stage.modules.gaussian_dist import DiagonalGaussianDistribution, _DeterministicPosterior
 
 __all__ = [
     "AutoencoderKL",
 ]
-
-
-class _DeterministicPosterior:
-    """Posterior when encoder outputs z directly (double_z=False, no Gaussian)."""
-
-    def __init__(self, z: torch.Tensor):
-        self.z = z
-
-    def sample(self) -> torch.Tensor:
-        return self.z
-
-    def mode(self) -> torch.Tensor:
-        return self.z
-
-    def kl(self) -> torch.Tensor:
-        return torch.zeros((), device=self.z.device, dtype=self.z.dtype)
 
 
 class AutoencoderKL(nn.Module):
@@ -120,5 +104,7 @@ class AutoencoderKL(nn.Module):
             return dec, p_loss + alignment_loss
         
         return dec, p_loss
+
+
 
 

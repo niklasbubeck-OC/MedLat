@@ -1,6 +1,22 @@
 import torch
 import numpy as np
 
+
+class _DeterministicPosterior:
+    """Posterior when encoder outputs z directly (double_z=False, no Gaussian)."""
+
+    def __init__(self, z: torch.Tensor):
+        self.z = z
+
+    def sample(self) -> torch.Tensor:
+        return self.z
+
+    def mode(self) -> torch.Tensor:
+        return self.z
+
+    def kl(self) -> torch.Tensor:
+        return torch.zeros((), device=self.z.device, dtype=self.z.dtype)
+
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False, channel_dim=1):
         self.parameters = parameters
