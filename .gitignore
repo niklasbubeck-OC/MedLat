@@ -43,6 +43,7 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.claude/
 nosetests.xml
 coverage.xml
 *.cover
@@ -206,3 +207,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# datasets 
+cifar*
