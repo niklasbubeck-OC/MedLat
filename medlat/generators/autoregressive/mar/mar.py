@@ -17,8 +17,8 @@ __all__ = ['MAR']
 
 
 def mask_by_order(mask_len, order, bsz, seq_len):
-    masking = torch.zeros(bsz, seq_len).cuda()
-    masking = torch.scatter(masking, dim=-1, index=order[:, :mask_len.long()], src=torch.ones(bsz, seq_len).cuda()).bool()
+    masking = torch.zeros(bsz, seq_len, device=order.device)
+    masking = torch.scatter(masking, dim=-1, index=order[:, :mask_len.long()], src=torch.ones(bsz, seq_len, device=order.device)).bool()
     return masking
 
 
@@ -174,7 +174,7 @@ class MAR(nn.Module):
             order = np.array(list(range(self.seq_len)))
             np.random.shuffle(order)
             orders.append(order)
-        orders = torch.Tensor(np.array(orders)).cuda().long()
+        orders = torch.Tensor(np.array(orders)).long()
         return orders
 
     def random_masking(self, x, orders):
@@ -198,7 +198,7 @@ class MAR(nn.Module):
         # random drop class embedding during training
         if self.training:
             drop_latent_mask = torch.rand(bsz) < self.label_drop_prob
-            drop_latent_mask = drop_latent_mask.unsqueeze(-1).cuda().to(x.dtype)
+            drop_latent_mask = drop_latent_mask.unsqueeze(-1).to(x.device).to(x.dtype)
             class_embedding = drop_latent_mask * self.fake_latent + (1 - drop_latent_mask) * class_embedding
 
         # combine class and dataset embeddings
@@ -269,7 +269,7 @@ class MAR(nn.Module):
         # patchify and mask (drop) tokens
         x = self.patchify(imgs)
         gt_latents = x.clone().detach()
-        orders = self.sample_orders(bsz=x.size(0))
+        orders = self.sample_orders(bsz=x.size(0)).to(x.device)
         mask = self.random_masking(x, orders)
 
         # mae encoder
@@ -326,10 +326,10 @@ class MAR(nn.Module):
 
             # mask ratio for the next round, following MaskGIT and MAGE.
             mask_ratio = np.cos(math.pi / 2. * (step + 1) / num_iter)
-            mask_len = torch.Tensor([np.floor(self.seq_len * mask_ratio)]).cuda()
+            mask_len = torch.Tensor([np.floor(self.seq_len * mask_ratio)]).to(device)
 
             # masks out at least one for the next iteration
-            mask_len = torch.maximum(torch.Tensor([1]).cuda(),
+            mask_len = torch.maximum(torch.Tensor([1]).to(device),
                                      torch.minimum(torch.sum(mask, dim=-1, keepdims=True) - 1, mask_len))
 
             # get masking for next iteration and locations to be predicted in this iteration

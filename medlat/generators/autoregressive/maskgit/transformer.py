@@ -3,9 +3,9 @@ from functools import partial
 import torch
 import torch.nn as nn
 
-from timm.models.vision_transformer import PatchEmbed, DropPath, Mlp
+from timm.models.vision_transformer import DropPath, Mlp
 
-from .utils.pos_embed import get_2d_sincos_pos_embed
+from medlat.modules.pos_embed import get_2d_sincos_pos_embed
 
 from omegaconf import OmegaConf
 import numpy as np

@@ -30,6 +30,13 @@ pip install -e .
 
 Some code paths import extra packages (e.g. wavelets in quantizers); install those if you hit import errors for a specific model.
 
+### Tests and CI
+
+- **Fast checks (pytest):** `pip install -e ".[dev]"` then `pytest tests/ -v` — runs [`tests/test_smoke.py`](tests/test_smoke.py) (imports, registry, one small model).
+- **Full registry suite (script, slower):** `python tests/registry_integration.py` — exercises many registered models (instantiation / forwards); intended for local or CI deep runs.
+
+On **GitHub**, [`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs both on every **push** and **pull request** to `main` / `master` (and can be run manually under **Actions**). Failed runs appear with a red ✗ on the commit.
+
 ---
 
 ## Quick start

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Sequence, Tuple
+from typing import Sequence, Tuple, Optional
 import numpy as np
 import torch
+import torch.nn as nn
 
 
 def _to_tuple(value: int | Sequence[int], dims: int) -> Tuple[int, ...]:
@@ -20,12 +21,164 @@ def _build_grid(size: Tuple[int, ...]) -> torch.Tensor:
     return coords
 
 
-def get_sincos_pos_embed(embed_dim, grid_size, dims):
+# --------------------------------------------------------
+# 1-D sine-cosine helpers
+# --------------------------------------------------------
+
+def get_1d_sincos_pos_embed_from_grid(embed_dim: int, pos: np.ndarray) -> np.ndarray:
     """
-    grid_size: int or tuple of the grid dimensions (depth, height, width) for 3D or (height, width) for 2D
-    dims: int, 2 for 2D or 3 for 3D
-    return:
-    pos_embed: [grid_size*grid_size*grid_size, embed_dim] or [1+grid_size*grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
+    embed_dim: output dimension for each position
+    pos: array of positions to encode, shape (M,)
+    returns: (M, embed_dim)
+    """
+    assert embed_dim % 2 == 0
+    omega = np.arange(embed_dim // 2, dtype=np.float32)
+    omega /= embed_dim / 2.
+    omega = 1. / 10000 ** omega
+    pos = pos.reshape(-1)
+    out = np.einsum('m,d->md', pos, omega)
+    emb_sin = np.sin(out)
+    emb_cos = np.cos(out)
+    return np.concatenate([emb_sin, emb_cos], axis=1)
+
+
+def get_1d_sincos_pos_embed(embed_dim: int, seq_len: int, cls_token: bool = False) -> np.ndarray:
+    """
+    Returns sincos pos embed for a 1-D sequence.
+    Shape: [seq_len, embed_dim]  (or [1+seq_len, embed_dim] if cls_token=True).
+    """
+    pos = np.arange(seq_len, dtype=np.float32)
+    emb = get_1d_sincos_pos_embed_from_grid(embed_dim, pos)
+    if cls_token:
+        emb = np.concatenate([np.zeros([1, embed_dim]), emb], axis=0)
+    return emb
+
+
+# --------------------------------------------------------
+# 2-D sine-cosine position embedding
+# References: MAE, MoCo v3, Transformer (Google)
+# --------------------------------------------------------
+
+def get_2d_sincos_pos_embed_from_grid(embed_dim: int, grid: np.ndarray) -> np.ndarray:
+    assert embed_dim % 2 == 0
+    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])
+    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])
+    return np.concatenate([emb_h, emb_w], axis=1)
+
+
+def get_2d_sincos_pos_embed(
+    embed_dim: int,
+    grid_size: int | Sequence[int],
+    cls_token: bool = False,
+    extra_tokens: int = 0,
+) -> np.ndarray:
+    """
+    grid_size: int (square grid) or (H, W) tuple.
+    Returns pos_embed of shape [H*W, embed_dim],
+    or [(extra_tokens + H*W), embed_dim] when cls_token=True and extra_tokens>0.
+    """
+    if isinstance(grid_size, (int, np.integer)):
+        gh, gw = int(grid_size), int(grid_size)
+    else:
+        gh, gw = int(grid_size[0]), int(grid_size[1])
+
+    grid_h = np.arange(gh, dtype=np.float32)
+    grid_w = np.arange(gw, dtype=np.float32)
+    grid = np.meshgrid(grid_w, grid_h)  # w goes first
+    grid = np.stack(grid, axis=0).reshape([2, 1, gh, gw])
+    pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
+    if cls_token or extra_tokens > 0:
+        n_extra = extra_tokens if extra_tokens > 0 else 1
+        pos_embed = np.concatenate([np.zeros([n_extra, embed_dim]), pos_embed], axis=0)
+    return pos_embed
+
+
+# --------------------------------------------------------
+# 3-D sine-cosine position embedding
+# --------------------------------------------------------
+
+def get_3d_sincos_pos_embed_from_grid(embed_dim: int, grid: np.ndarray) -> np.ndarray:
+    assert embed_dim % 3 == 0
+    emb_d = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[0])
+    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[1])
+    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[2])
+    return np.concatenate([emb_d, emb_h, emb_w], axis=1)
+
+
+def get_3d_sincos_pos_embed(
+    embed_dim: int,
+    grid_size: Optional[Sequence[int]] = None,
+    *,
+    grid_depth: Optional[int] = None,
+    grid_height: Optional[int] = None,
+    grid_width: Optional[int] = None,
+    cls_token: bool = False,
+) -> np.ndarray:
+    """
+    Accepts either a (D, H, W) tuple via grid_size or explicit keyword arguments
+    grid_depth / grid_height / grid_width.
+
+    Returns shape [D*H*W, embed_dim], or [1+D*H*W, embed_dim] if cls_token=True.
+    """
+    if grid_size is not None:
+        gd, gh, gw = int(grid_size[0]), int(grid_size[1]), int(grid_size[2])
+    elif grid_depth is not None and grid_height is not None and grid_width is not None:
+        gd, gh, gw = int(grid_depth), int(grid_height), int(grid_width)
+    else:
+        raise ValueError("Provide either grid_size tuple or grid_depth/grid_height/grid_width kwargs.")
+
+    grid_d = np.arange(gd, dtype=np.float32)
+    grid_h = np.arange(gh, dtype=np.float32)
+    grid_w = np.arange(gw, dtype=np.float32)
+    grid = np.meshgrid(grid_d, grid_h, grid_w, indexing='ij')
+    grid = np.stack(grid, axis=0).reshape([3, 1, gd, gh, gw])
+    pos_embed = get_3d_sincos_pos_embed_from_grid(embed_dim, grid)
+    if cls_token:
+        pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
+    return pos_embed
+
+
+# --------------------------------------------------------
+# 4-D sine-cosine position embedding  (T, D, H, W)
+# --------------------------------------------------------
+
+def get_4d_sincos_pos_embed_from_grid(embed_dim: int, grid: np.ndarray) -> np.ndarray:
+    assert embed_dim % 4 == 0
+    emb_t = get_1d_sincos_pos_embed_from_grid(embed_dim // 4, grid[0])
+    emb_d = get_1d_sincos_pos_embed_from_grid(embed_dim // 4, grid[1])
+    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 4, grid[2])
+    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 4, grid[3])
+    return np.concatenate([emb_d, emb_t, emb_h, emb_w], axis=1)
+
+
+def get_4d_sincos_pos_embed(
+    embed_dim: int,
+    grid_time: int,
+    grid_depth: int,
+    grid_height: int,
+    grid_width: int,
+    cls_token: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Returns shape [T*D*H*W, embed_dim], or [cls_token+T*D*H*W, embed_dim] if cls_token is not None.
+    """
+    grid_t = np.arange(grid_time, dtype=float)
+    grid_d = np.arange(grid_depth, dtype=float)
+    grid_h = np.arange(grid_height, dtype=float)
+    grid_w = np.arange(grid_width, dtype=float)
+    grid = np.meshgrid(grid_t, grid_d, grid_h, grid_w, indexing='ij')
+    grid = np.stack(grid, axis=0).reshape([4, 1, grid_time, grid_depth, grid_height, grid_width])
+    pos_embed = get_4d_sincos_pos_embed_from_grid(embed_dim, grid)
+    if cls_token:
+        pos_embed = np.concatenate([np.zeros([cls_token, embed_dim]), pos_embed], axis=0)
+    return pos_embed
+
+
+# convenience dispatcher
+def get_sincos_pos_embed(embed_dim: int, grid_size: int | Sequence[int], dims: int) -> np.ndarray:
+    """
+    grid_size: int or tuple of grid dimensions.
+    dims: 2 for 2D, 3 for 3D.
     """
     if isinstance(grid_size, int):
         grid_size = (grid_size,) * dims
@@ -36,45 +189,35 @@ def get_sincos_pos_embed(embed_dim, grid_size, dims):
     else:
         raise ValueError("dims must be 2 or 3.")
 
-def get_2d_sincos_pos_embed(embed_dim, grid_size):
-    grid_h = np.arange(grid_size[0], dtype=np.float32)
-    grid_w = np.arange(grid_size[1], dtype=np.float32)
-    grid = np.meshgrid(grid_w, grid_h)
-    grid = np.stack(grid, axis=0).reshape([2, 1, grid_size[0], grid_size[1]])
-    return get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
 
-def get_3d_sincos_pos_embed(embed_dim, grid_size):
-    grid_d = np.arange(grid_size[0], dtype=np.float32)
-    grid_h = np.arange(grid_size[1], dtype=np.float32)
-    grid_w = np.arange(grid_size[2], dtype=np.float32)
-    grid = np.meshgrid(grid_w, grid_h, grid_d)
-    grid = np.stack(grid, axis=0).reshape([3, 1, grid_size[0], grid_size[1], grid_size[2]])
-    return get_3d_sincos_pos_embed_from_grid(embed_dim, grid)
+# --------------------------------------------------------
+# Interpolate position embeddings for high-resolution
+# References: DeiT
+# --------------------------------------------------------
 
-def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
-    assert embed_dim % 2 == 0
-    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])
-    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])
-    return np.concatenate([emb_h, emb_w], axis=1)
+def interpolate_pos_embed(model: nn.Module, checkpoint_model: dict) -> None:
+    if 'pos_embed' in checkpoint_model:
+        pos_embed_checkpoint = checkpoint_model['pos_embed']
+        embedding_size = pos_embed_checkpoint.shape[-1]
+        num_patches = model.patch_embed.num_patches
+        num_extra_tokens = model.pos_embed.shape[-2] - num_patches
+        orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens) ** 0.5)
+        new_size = int(num_patches ** 0.5)
+        if orig_size != new_size:
+            print(f"Position interpolate from {orig_size}x{orig_size} to {new_size}x{new_size}")
+            extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
+            pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
+            pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
+            pos_tokens = torch.nn.functional.interpolate(
+                pos_tokens, size=(new_size, new_size), mode='bicubic', align_corners=False)
+            pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
+            new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
+            checkpoint_model['pos_embed'] = new_pos_embed
 
-def get_3d_sincos_pos_embed_from_grid(embed_dim, grid):
-    assert embed_dim % 3 == 0
-    emb_d = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[0])
-    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[1])
-    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[2])
-    return np.concatenate([emb_d, emb_h, emb_w], axis=1)
 
-def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
-    assert embed_dim % 2 == 0
-    omega = np.arange(embed_dim // 2, dtype=np.float32)
-    omega /= embed_dim / 2.
-    omega = 1. / 10000**omega
-    pos = pos.reshape(-1)
-    out = np.einsum('m,d->md', pos, omega)
-    emb_sin = np.sin(out)
-    emb_cos = np.cos(out)
-    return np.concatenate([emb_sin, emb_cos], axis=1)
-
+# --------------------------------------------------------
+# RoPE (Rotary Position Embedding)
+# --------------------------------------------------------
 
 def _rotate_half(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., ::2]
@@ -118,136 +261,3 @@ def apply_rotary_emb(x: torch.Tensor, rope: torch.Tensor) -> torch.Tensor:
     cos = cos.to(dtype=x.dtype, device=x.device)
     sin = sin.to(dtype=x.dtype, device=x.device)
     return (x * cos) + (_rotate_half(x) * sin)
-
-# """"2D and 3D sine-cosine position embedding"""
-
-# def get_sincos_pos_embed(embed_dim, grid_size, dims):
-#     """
-#     grid_size: int or tuple of the grid dimensions (depth, height, width) for 3D or (height, width) for 2D
-#     dims: int, 2 for 2D or 3 for 3D
-#     return:
-#     pos_embed: [grid_size*grid_size*grid_size, embed_dim] or [1+grid_size*grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
-#     """
-#     if isinstance(grid_size, int):
-#         grid_size = (grid_size,) * dims
-#     if dims == 2:
-#         return get_2d_sincos_pos_embed(embed_dim, grid_size)
-#     elif dims == 3:
-#         return get_3d_sincos_pos_embed(embed_dim, grid_size)
-#     else:
-#         raise ValueError("dims must be 2 or 3.")
-
-# def get_2d_sincos_pos_embed(embed_dim, grid_size):
-#     grid_h = np.arange(grid_size[0], dtype=np.float32)
-#     grid_w = np.arange(grid_size[1], dtype=np.float32)
-#     grid = np.meshgrid(grid_w, grid_h)
-#     grid = np.stack(grid, axis=0).reshape([2, 1, grid_size[0], grid_size[1]])
-#     return get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
-
-# def get_3d_sincos_pos_embed(embed_dim, grid_size):
-#     grid_d = np.arange(grid_size[0], dtype=np.float32)
-#     grid_h = np.arange(grid_size[1], dtype=np.float32)
-#     grid_w = np.arange(grid_size[2], dtype=np.float32)
-#     grid = np.meshgrid(grid_w, grid_h, grid_d)
-#     grid = np.stack(grid, axis=0).reshape([3, 1, grid_size[0], grid_size[1], grid_size[2]])
-#     return get_3d_sincos_pos_embed_from_grid(embed_dim, grid)
-
-# def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
-#     assert embed_dim % 2 == 0
-#     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])
-#     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])
-#     return np.concatenate([emb_h, emb_w], axis=1)
-
-# def get_3d_sincos_pos_embed_from_grid(embed_dim, grid):
-#     assert embed_dim % 3 == 0
-#     emb_d = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[0])
-#     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[1])
-#     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 3, grid[2])
-#     return np.concatenate([emb_d, emb_h, emb_w], axis=1)
-
-# def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
-#     assert embed_dim % 2 == 0
-#     omega = np.arange(embed_dim // 2, dtype=np.float32)
-#     omega /= embed_dim / 2.
-#     omega = 1. / 10000**omega
-#     pos = pos.reshape(-1)
-#     out = np.einsum('m,d->md', pos, omega)
-#     emb_sin = np.sin(out)
-#     emb_cos = np.cos(out)
-#     return np.concatenate([emb_sin, emb_cos], axis=1)
-
-# """RoPE position embedding"""
-
-
-# def rotate_half(x: Tensor) -> Tensor:
-#     """rotate half of the input tensor for rotary position embedding."""
-#     x = rearrange(x, "... (d r) -> ... d r", r=2)
-#     x1, x2 = x.unbind(dim=-1)
-#     x = torch.stack((-x2, x1), dim=-1)
-#     return rearrange(x, "... d r -> ... (d r)")
-
-
-# def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
-#     """apply rotary position embedding to input tensor."""
-#     freqs_cos, freqs_sin = freqs_cis.unsqueeze(1).chunk(2, dim=-1)
-#     return x * freqs_cos + rotate_half(x) * freqs_sin
-
-
-# def get_rope_tensor_3d(
-#     dim: int, seq_d: int, seq_h: int, seq_w: int,
-#     max_freq: float = 7.0, min_freq: float = 7e-4
-# ) -> Tensor:
-#     """
-#     Generate rotary position embedding tensor for 3D sequences.
-#     dim must be divisible by 6 (cos+sin for each of D, H, W).
-#     """
-#     if dim % 6 != 0:
-#         raise ValueError(f"dim per attn head must be divisible by 6 for 3D RoPE. Got {dim}")
-
-#     dim_each = dim // 3  # split equally for d,h,w
-#     # freqs_1d = max_freq * (max_freq / min_freq) ** torch.linspace(0, -1, dim_each // 2)
-#     freqs_1d = torch.logspace(
-#         start=np.log10(min_freq),
-#         end=np.log10(max_freq),
-#         steps=dim_each // 2,
-#         base=10.0
-#     )
-
-#     # repeat for cos/sin
-#     freqs_1d = torch.cat([freqs_1d, freqs_1d])  # [dim_each]
-
-#     # frequency matrices per axis
-#     freqs_3d = torch.zeros(3, dim)
-#     freqs_3d[0, :dim_each] = freqs_1d  # depth axis
-#     freqs_3d[1, dim_each:2 * dim_each] = freqs_1d  # height axis
-#     freqs_3d[2, 2 * dim_each:] = freqs_1d  # width axis
-#     freqs_3d = freqs_3d * 2 * torch.pi
-
-#     # coordinate grid [seq_d * seq_h * seq_w, 3]
-#     coord_d = torch.linspace(0, 1, seq_d)
-#     coord_h = torch.linspace(0, 1, seq_h)
-#     coord_w = torch.linspace(0, 1, seq_w)
-#     coords_all = torch.cartesian_prod(coord_d, coord_h, coord_w)
-
-#     # angles: [N, dim]
-#     angle = coords_all @ freqs_3d
-#     rope_tensor = torch.cat([angle.cos(), angle.sin()], dim=-1)  # [N, 2*dim]
-#     return rope_tensor
-
-
-# def get_rope_tensor_2d(
-#     dim: int, seq_h: int, seq_w: int, max_freq: float = 7.0, min_freq: float = 7e-4
-# ) -> Tensor:
-#     """generate rotary position embedding tensor for 2D sequences."""
-#     freqs_1d = max_freq * (max_freq / min_freq) ** torch.linspace(0, -1, dim // 4)
-#     freqs_1d = torch.cat([freqs_1d, freqs_1d])
-#     freqs_2d = torch.zeros(2, dim)
-#     freqs_2d[0, : dim // 2] = freqs_1d
-#     freqs_2d[1, -dim // 2 :] = freqs_1d
-#     freqs_2d = freqs_2d * 2 * torch.pi
-#     coord_x = torch.linspace(0, 1, seq_h)
-#     coord_y = torch.linspace(0, 1, seq_w)
-#     coords_all = torch.cartesian_prod(coord_x, coord_y)
-#     angle = coords_all @ freqs_2d
-#     rope_tensor = torch.cat([angle.cos(), angle.sin()], dim=-1)
-#     return rope_tensor
