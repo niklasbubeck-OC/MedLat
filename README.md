@@ -114,6 +114,95 @@ See `example_generator_*.ipynb` for complete runnable examples of each pipeline.
 
 ---
 
+## Latent alignment
+
+Training a tokenizer that only minimizes reconstruction loss gives you a compact latent space — but one that is *geometrically opaque*. Nearby points carry no semantic guarantee, which makes downstream generation harder. MedLat borrows the **Vision-Foundation (VF) alignment** technique from VA-VAE and extends it with medical-vision support via BiomedCLIP:
+
+```
+Image ──► Encoder ──► z ──► Decoder ──► reconstruction loss
+                       │
+                       ▼   (during training only)
+              AlignmentModule
+          ┌─────────────────────────────────────────┐
+          │  Frozen foundation model                │
+          │  (DINOv2 / MAE / BiomedCLIP)            │
+          │            │                            │
+          │            ▼  target features           │
+          │  Projection head on z                   │
+          │            │                            │
+          │            ▼  predicted features        │
+          │  VF loss = distmat_loss + cosine_loss   │
+          └─────────────────────────────────────────┘
+                       │
+                       ▼
+          total loss = recon + KL + VF
+```
+
+The result: latent codes that are **semantically structured** — nearby points in latent space correspond to semantically similar images, which substantially improves generation quality with any downstream generator.
+
+### Built-in aligned tokenizers
+
+| ID | Foundation model | Best for |
+|----|-----------------|---------|
+| `continuous.vavae.f8_d16_dinov2` | DINOv2-L (frozen) | Natural images, general vision |
+| `continuous.vavae.f8_d32_dinov2` | DINOv2-L (frozen) | Same, higher channel width |
+| `continuous.vavae.f16_d16_mae` | MAE-L (frozen) | Self-supervised vision |
+| `continuous.vavae.f16_d32_mae` | MAE-L (frozen) | Same, higher channel width |
+| `continuous.vavae.f16_d64_mae` | MAE-L (frozen) | Same, max channel width |
+| `continuous.vavae.f16_d16_dinov2` | DINOv2-L (frozen) | |
+| `continuous.vavae.f16_d32_dinov2` | DINOv2-L (frozen) | |
+| `continuous.vavae.f16_d64_dinov2` | DINOv2-L (frozen) | |
+| `continuous.medvae.f8_d16` | **BiomedCLIP** (frozen) | **Medical images** (radiology, pathology) |
+| `continuous.medvae.f8_d32` | **BiomedCLIP** (frozen) | Same, higher channel width |
+
+### Adding alignment to any tokenizer
+
+The `alignment` argument is available on every `AutoencoderKL` — you are not limited to the pre-registered IDs:
+
+```python
+from medlat import get_model
+from medlat.modules.alignments import VFFoundationAlignment
+
+# Standard AEKL — reconstruction + KL only
+tokenizer = get_model("continuous.aekl.f8_d16", img_size=256)
+
+# Same architecture, trained with DINOv2 semantic alignment
+alignment = VFFoundationAlignment(latent_channels=16, foundation_type="dinov2")
+tokenizer_aligned = get_model("continuous.aekl.f8_d16", img_size=256, alignment=alignment)
+
+# For medical images, align to BiomedCLIP instead
+alignment_med = VFFoundationAlignment(latent_channels=16, foundation_type="biomedclip")
+tokenizer_medical = get_model("continuous.aekl.f8_d16", img_size=256, alignment=alignment_med)
+```
+
+The foundation model is **entirely frozen** during training. Alignment only adds a learnable projection head and a VF loss term — no extra parameters in the encoder or decoder.
+
+### The VF loss
+
+`VFFoundationAlignment` computes two complementary objectives:
+
+1. **`vf_loss_1` (structure preservation):** The pairwise cosine-similarity matrix of projected latents should mirror that of the frozen features (with a `distmat_margin` slack).
+2. **`vf_loss_2` (directional alignment):** Each individual spatial location should be directionally consistent with its counterpart in foundation space (with a `cos_margin` slack).
+
+Both margins and weights are configurable:
+
+```python
+VFFoundationAlignment(
+    latent_channels=16,
+    foundation_type="dinov2",  # "mae" | "dinov2" | "biomedclip"
+    distmat_margin=0.25,
+    cos_margin=0.5,
+    distmat_weight=1.0,
+    cos_weight=1.0,
+)
+```
+
+### Multi-modal tip
+
+When training on heterogeneous modalities (e.g. knee MRI + brain MRI), aligning both to the **same** foundation model (BiomedCLIP for medical data) gives the generator a consistent semantic coordinate system regardless of which modality is being encoded. The foundation model handles cross-modality semantic normalisation implicitly — the generator only sees a well-structured shared latent space.
+
+---
+
 ## Package layout
 
 ```
@@ -195,8 +284,8 @@ Registry IDs follow consistent patterns:
 |--------|-------------|-------------|
 | **AEKL** | LDM-style KL autoencoder, conv encoder/decoder | `continuous.aekl.f4_d3` … `continuous.aekl.f32_d64` |
 | **MAISI** | MONAI MAISI 3D-friendly KL AE | `continuous.maisi.f4_d3` |
-| **MedVAE** | KL AE aligned to BiomedCLIP | `continuous.medvae.f8_d16`, `continuous.medvae.f8_d32` |
-| **VAVAE** | Vision-foundation-aligned KL AE | `continuous.vavae.f8_d32_dinov2`, `continuous.vavae.f16_d64_mae` |
+| **MedVAE** | KL AE + **BiomedCLIP VF alignment** — semantically structured latents for medical images | `continuous.medvae.f8_d16`, `continuous.medvae.f8_d32` |
+| **VAVAE** | KL AE + **vision-foundation VF alignment** (DINOv2 or MAE) — same idea as VA-VAE paper | `continuous.vavae.f8_d32_dinov2`, `continuous.vavae.f16_d64_mae` |
 | **DCAE** | EfficientViT DC-AE (high compression ratio) | `continuous.dcae.f32c32`, `continuous.dcae.f128c512` |
 | **SoftVQ / WQVAE** | Soft or warped quantization, continuous wrapper | `continuous.soft_vq.f8_d16_e16384_dinov2`, `continuous.wqvae.f8_d4_e16384` |
 
