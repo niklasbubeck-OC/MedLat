@@ -6,6 +6,8 @@ from medlat.utils import init_from_ckpt, get_model_type
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["GenWrapper"]
+
 
 class GenWrapper(nn.Module):
     def __init__(

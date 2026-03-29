@@ -3,6 +3,8 @@ from medlat.first_stage.continuous.modules.maisi_modules import MaisiEncoder, Ma
 from medlat.first_stage.continuous.modules.dcae_modules.dcae_modules import DCAEEncoder, DCAEDecoder
 from medlat.registry import register_model
 from medlat.first_stage.continuous.vae_models import AutoencoderKL, AutoencoderKLTransformer
+
+__all__ = []
 from medlat.modules.alignments import *
 from medlat.modules.vit_core import GenericViTEncoder, GenericViTDecoder
 
