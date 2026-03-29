@@ -3,8 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
-from timm.models.vision_transformer import Mlp
-from timm.layers import trunc_normal_
+
 from medlat.modules.in_and_out import PatchEmbed, ToPixel
 from medlat.modules.pos_embed import get_2d_sincos_pos_embed, to_ntuple
 
@@ -68,6 +67,7 @@ class RelativePositionBias(nn.Module):
     # https://github.com/microsoft/unilm/blob/master/beit/modeling_finetune.py
     def __init__(self, window_size, num_heads):
         super().__init__()
+        from timm.layers import trunc_normal_
         self.window_size = window_size
         self.num_relative_distance = (
             2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3
@@ -197,6 +197,7 @@ class MDTBlock(nn.Module):
 
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, skip=False, **block_kwargs):
         super().__init__()
+        from timm.models.vision_transformer import Mlp
         self.norm1 = nn.LayerNorm(
             hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(

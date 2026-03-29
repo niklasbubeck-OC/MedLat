@@ -5,9 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import cv2
 import numpy as np
-import open_clip
 import torchvision.transforms as T
 
 # For external models (DINO, CLIP) - try importing timm but make it optional
@@ -132,6 +130,7 @@ class HOGGenerator(nn.Module):
 
     def generate_hog_image(self, hog_out: torch.Tensor) -> np.ndarray:
         """Generate HOG image according to HOG features."""
+        import cv2
         assert hog_out.size(0) == 1 and hog_out.size(1) == 3, \
             'Check the input batch size and the channcel number, only support'\
             '"batch_size = 1".'
@@ -574,6 +573,7 @@ class FoundationFeatureExtractor(nn.Module):
             self.feature_dim = 1024
         elif self.model_type == "biomedclip":
             # OpenCLIP BiomedCLIP ViT-B/16; use encode_image for vision tower
+            import open_clip
             self.model, _, _ = open_clip.create_model_and_transforms(
                 model_name="hf-hub:microsoft/BiomedCLIP-PubMedBERT_256-vit_base_patch16_224",
             )

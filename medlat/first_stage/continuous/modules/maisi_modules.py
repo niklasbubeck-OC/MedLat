@@ -19,10 +19,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from monai.networks.blocks import Convolution
-from monai.networks.blocks.spatialattention import SpatialAttentionBlock
-from monai.networks.nets.autoencoderkl import AEKLResBlock, AutoencoderKL
-from monai.utils.type_conversion import convert_to_tensor
 
 # Set up logging configuration
 logger = logging.getLogger(__name__)
@@ -212,6 +208,7 @@ class MaisiConvolution(nn.Module):
         output_padding: Sequence[int] | int | None = None,
     ) -> None:
         super().__init__()
+        from monai.networks.blocks import Convolution
         self.conv = Convolution(
             spatial_dims=spatial_dims,
             in_channels=in_channels,
@@ -388,6 +385,7 @@ class MaisiUpsample(nn.Module):
         self.save_mem = save_mem
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from monai.utils.type_conversion import convert_to_tensor
         if self.use_convtranspose:
             x = self.conv(x)
             x_tensor: torch.Tensor = convert_to_tensor(x)
@@ -546,6 +544,7 @@ class MaisiResBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from monai.utils.type_conversion import convert_to_tensor
         h = self.norm1(x)
         _empty_cuda_cache(self.save_mem)
 
@@ -617,6 +616,8 @@ class MaisiEncoder(nn.Module):
         use_flash_attention: bool = False,
     ) -> None:
         super().__init__()
+        from monai.networks.blocks.spatialattention import SpatialAttentionBlock
+        from monai.networks.nets.autoencoderkl import AEKLResBlock
 
         # Check if attention_levels and num_channels have the same size
         if len(attention_levels) != len(num_channels):
@@ -815,6 +816,8 @@ class MaisiDecoder(nn.Module):
         use_convtranspose: bool = False,
     ) -> None:
         super().__init__()
+        from monai.networks.blocks.spatialattention import SpatialAttentionBlock
+        from monai.networks.nets.autoencoderkl import AEKLResBlock
         self.print_info = print_info
         self.save_mem = save_mem
         self.double_z = double_z

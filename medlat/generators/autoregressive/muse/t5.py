@@ -1,11 +1,7 @@
 import logging
 import torch
-import transformers
-from transformers import T5Tokenizer, T5EncoderModel, T5Config
 
 from typing import List, Union
-
-transformers.logging.set_verbosity_error()
 
 def exists(val):
     return val is not None
@@ -21,10 +17,16 @@ T5_CONFIGS = {}
 # singleton globals
 
 def get_tokenizer(name):
+    import transformers
+    transformers.logging.set_verbosity_error()
+    from transformers import T5Tokenizer
     tokenizer = T5Tokenizer.from_pretrained(name)
     return tokenizer
 
 def get_model(name):
+    import transformers
+    transformers.logging.set_verbosity_error()
+    from transformers import T5EncoderModel
     model = T5EncoderModel.from_pretrained(name)
     return model
 
@@ -41,6 +43,7 @@ def get_model_and_tokenizer(name):
     return T5_CONFIGS[name]['model'], T5_CONFIGS[name]['tokenizer']
 
 def get_encoded_dim(name):
+    from transformers import T5Config
     if name not in T5_CONFIGS:
         # avoids loading the model if we only want to get the dim
         config = T5Config.from_pretrained(name)

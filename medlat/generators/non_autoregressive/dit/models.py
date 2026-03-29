@@ -16,7 +16,7 @@ import numpy as np
 import math
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from timm.models.vision_transformer import Attention, Mlp
+
 from medlat.modules.in_and_out import PatchEmbed, ToPixel
 from medlat.modules.pos_embed import get_2d_sincos_pos_embed, get_3d_sincos_pos_embed
 from medlat.modules.embeddings import (
@@ -37,6 +37,7 @@ __all__ = ["DiT"]
 class DiTBlock(nn.Module):
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, cond_dim=None, **block_kwargs):
         super().__init__()
+        from timm.models.vision_transformer import Attention, Mlp
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)

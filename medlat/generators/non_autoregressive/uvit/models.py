@@ -2,7 +2,7 @@ import logging
 import torch
 import torch.nn as nn
 import math
-from timm.models.layers import Mlp, trunc_normal_
+
 from medlat.modules.in_and_out import PatchEmbed, ToPixel
 from medlat.modules.pos_embed import to_ntuple
 
@@ -96,6 +96,7 @@ class Block(nn.Module):
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm, skip=False, use_checkpoint=False):
         super().__init__()
+        from timm.models.layers import Mlp
         self.norm1 = norm_layer(dim)
         self.attn = Attention(
             dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale)
@@ -124,6 +125,7 @@ class UViT(nn.Module):
                  qkv_bias=False, qk_scale=None, norm_layer=nn.LayerNorm, mlp_time_embed=False, num_classes=-1,
                  use_checkpoint=False, conv=True, skip=True, dims=2):
         super().__init__()
+        from timm.models.layers import trunc_normal_
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.num_classes = num_classes
         self.in_chans = in_chans
@@ -171,6 +173,7 @@ class UViT(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
+        from timm.models.layers import trunc_normal_
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
             if isinstance(m, nn.Linear) and m.bias is not None:

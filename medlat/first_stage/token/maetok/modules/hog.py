@@ -1,7 +1,6 @@
 import math
-import torch 
-import cv2 
-import torch.nn as nn 
+import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
     
@@ -116,6 +115,7 @@ class HOGGenerator(nn.Module):
 
     def generate_hog_image(self, hog_out: torch.Tensor) -> np.ndarray:
         """Generate HOG image according to HOG features."""
+        import cv2
         assert hog_out.size(0) == 1 and hog_out.size(1) == 3, \
             'Check the input batch size and the channcel number, only support'\
             '"batch_size = 1".'

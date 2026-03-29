@@ -24,7 +24,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from functools import partial
-from timm.layers import Mlp
 from typing import Optional
 import numpy as np
 import random
@@ -149,9 +148,12 @@ class Block(nn.Module):
             attn_drop: float = 0.,
             act_layer: nn.Module = nn.GELU,
             norm_layer: nn.Module = nn.LayerNorm,
-            mlp_layer: nn.Module = Mlp,
+            mlp_layer: nn.Module = None,
     ) -> None:
         super().__init__()
+        from timm.layers import Mlp
+        if mlp_layer is None:
+            mlp_layer = Mlp
         self.norm1 = norm_layer(dim)
         
         self.attn = Attention(
