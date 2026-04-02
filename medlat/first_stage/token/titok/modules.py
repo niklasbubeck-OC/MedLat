@@ -29,7 +29,6 @@ import einops
 from einops.layers.torch import Rearrange
 import torch.nn.functional as F
 from einops import rearrange
-from accelerate.utils.operations import gather
 from torch.amp import autocast
 from typing import Mapping, Text, Tuple
 import numpy as np
@@ -778,6 +777,7 @@ class VectorQuantizer(torch.nn.Module):
     # Ensure quantization is performed using f32
     @autocast('cuda', enabled=False)
     def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, Mapping[Text, torch.Tensor]]:
+        from accelerate.utils.operations import gather
         z = z.float()
         z = rearrange(z, 'b c h w -> b h w c').contiguous()
         z_flattened = rearrange(z, 'b h w c -> (b h w) c')

@@ -15,7 +15,6 @@ import random
 from .modules import *
 from torch.amp import autocast
 from medlat.registry import register_model
-import pytorch_wavelets as ptwt 
 
 __all__ = ["VectorQuantizer", "GumbelQuantize", "SimpleQINCo", "VectorQuantizer2", "SimVQ", "ResidualQuantizer", "MultiScaleResidualQuantizer", "MultiScaleResidualQuantizer3D", "LookupFreeQuantizer", "FiniteScalarQuantizer", "BinarySphericalQuantizer", "GroupedVQ", "QINCo", "QincoResidualQuantizer", "SoftVectorQuantizer", "WaveletResidualQuantizer"]
 
@@ -2010,6 +2009,7 @@ class WaveletResidualQuantizer(nn.Module):
         self.shared_codebook = shared_codebook
 
         # Fix: wavelet as STRING directly to DWTForward
+        import pytorch_wavelets as ptwt
         self.dwt = ptwt.DWTForward(J=wavelet_levels, wave=wavelet, mode='zero')
         self.idwt = ptwt.DWTInverse(wave=wavelet, mode='zero')  # <-- String here too!
 

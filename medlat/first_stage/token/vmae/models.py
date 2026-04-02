@@ -18,7 +18,6 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
-from timm.models.vision_transformer import PatchEmbed, Mlp, DropPath
 from typing import Dict, Optional, Tuple, Union
 import os, sys
 
@@ -27,10 +26,14 @@ from medlat.modules.pos_embed import get_2d_sincos_pos_embed
 ############################## Docking Functions ##############################
 from dataclasses import dataclass
 from typing import Optional, Tuple
-from diffusers.utils import BaseOutput
+try:
+    from diffusers.utils import BaseOutput
+except ImportError:
+    class BaseOutput:
+        """Minimal fallback for diffusers.utils.BaseOutput."""
+        pass
 from einops import rearrange
 from medlat.first_stage.modules.gaussian_dist import DiagonalGaussianDistribution
-from PIL import Image
 from torchvision import transforms
 import numpy as np
 
@@ -87,6 +90,7 @@ def center_crop_arr(pil_image, image_size):
     Center cropping implementation from ADM.
     https://github.com/openai/guided-diffusion/blob/8fb3ad9197f16bbc40620447b2742e13458d2831/guided_diffusion/image_datasets.py#L126
     """
+    from PIL import Image
     while min(*pil_image.size) >= 2 * image_size:
         pil_image = pil_image.resize(
             tuple(x // 2 for x in pil_image.size), resample=Image.BOX
@@ -167,6 +171,7 @@ class Block(nn.Module):
             norm_layer=nn.LayerNorm
     ):
         super().__init__()
+        from timm.models.vision_transformer import Mlp, DropPath
         self.norm1 = norm_layer(dim)
         self.attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
         self.ls1 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -297,7 +302,8 @@ class MaskedAutoencoderViT(nn.Module):
                  kl_loss_weight=None, smooth_output=False, pred_with_conv=False, perceptual_loss=None, perceptual_loss_ratio=1.0,
                  fixed_std=None):
         super().__init__()
-        
+        from timm.models.vision_transformer import PatchEmbed
+
         # --------------------------------------------------------------------------
         # MAE for LDMAE settings
         self.fixed_std = fixed_std

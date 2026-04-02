@@ -1,9 +1,9 @@
 from torchvision.utils import save_image
-from PIL import Image
 import torch
 
 
 def visualize_patch(viz_patches):
+    from PIL import Image
     from IPython.display import display, clear_output
     pix_mean = torch.Tensor([0.485, 0.456, 0.406]).to(viz_patches.device).view(1, -1, 1, 1)
     pix_std = torch.Tensor([0.229, 0.224, 0.225]).to(viz_patches.device).view(1, -1, 1, 1)

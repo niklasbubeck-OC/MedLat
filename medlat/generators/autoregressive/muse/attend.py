@@ -1,12 +1,10 @@
 from functools import wraps
-from packaging import version
 from collections import namedtuple
 
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
 
-from memory_efficient_attention_pytorch.flash_attention import FlashAttentionFunction
 # constants
 
 AttentionConfig = namedtuple('AttentionConfig', ['enable_flash', 'enable_math', 'enable_mem_efficient'])
@@ -44,6 +42,7 @@ class Attend(nn.Module):
         self.attn_dropout = nn.Dropout(dropout)
 
         self.flash = flash
+        from packaging import version
         assert not (flash and version.parse(torch.__version__) < version.parse('2.0.0')), 'in order to use flash attention, you must be using pytorch 2.0 or above'
 
         # determine efficient attention configs for cuda and cpu
@@ -64,6 +63,7 @@ class Attend(nn.Module):
             self.cuda_config = AttentionConfig(False, True, False)
 
     def flash_attn(self, q, k, v, mask = None):
+        from memory_efficient_attention_pytorch.flash_attention import FlashAttentionFunction
         default_scale = q.shape[-1] ** -0.5
 
         is_cuda = q.is_cuda

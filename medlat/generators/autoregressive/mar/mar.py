@@ -9,8 +9,6 @@ import torch.nn as nn
 import random
 from torch.utils.checkpoint import checkpoint
 
-from timm.models.vision_transformer import Block
-
 from medlat.diffusion.diffloss import DiffLoss
 from medlat.modules.pos_embed import to_ntuple
 
@@ -46,6 +44,7 @@ class MAR(nn.Module):
                  dims=2,
                  ):
         super().__init__()
+        from timm.models.vision_transformer import Block
 
         # --------------------------------------------------------------------------
         # VAE and patchify specifics

@@ -3,7 +3,6 @@ import torch
 from torch import nn
 from typing import List, Sequence, Tuple, Union
 from torch.utils.checkpoint import checkpoint
-from timm.models.vision_transformer import Block
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -88,6 +87,7 @@ class ImagingMaskedEncoder(nn.Module):
         *args, **kwargs
     ):
         super().__init__()
+        from timm.models.vision_transformer import Block
         self.enc_embed_dim = enc_embed_dim
         self.patch_size = patch_size
         self.circular_pe = circular_pe
@@ -254,6 +254,7 @@ class Relu(Layer):
 class ViTDecoder(nn.Module):
     def __init__(self, dim, num_heads, depth, mlp_ratio, norm_layer=nn.LayerNorm, grad_checkpointing: bool = False):
         super(ViTDecoder, self).__init__()
+        from timm.models.vision_transformer import Block
         self.network = nn.ModuleList([
             Block(dim, num_heads, mlp_ratio, qkv_bias=True, norm_layer=norm_layer)
             for i in range(depth)])
