@@ -698,7 +698,7 @@ def LFQ_f8_d18_b18(**kwargs):
 def LFQ_f4_d18_b18(**kwargs):
     return LFQ_f16_d18_b18(ch_mult=[1, 2, 4], **kwargs)
 
-@register_model("discrete.simple_qinco.f4_d3_e8192")
+@register_model("discrete.simple_qinco.f4_d3_e8192", paper_url="https://arxiv.org/abs/2501.03078")
 def SimpleQINCo_f4_d3_e8192(
         # --- encoder/decoder config ---
         img_size=256,
@@ -757,7 +757,7 @@ def SimpleQINCo_f4_d3_e8192(
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
 
-@register_model(f"discrete.simple_qinco.f8_d4_e16384")
+@register_model(f"discrete.simple_qinco.f8_d4_e16384", paper_url="https://arxiv.org/abs/2501.03078")
 def SimpleQINCo_f8_d4_e16384(
         # --- encoder/decoder config ---
         img_size=256,
@@ -816,7 +816,7 @@ def SimpleQINCo_f8_d4_e16384(
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
 
-@register_model(f"discrete.simple_qinco.f16_d8_e16384")
+@register_model(f"discrete.simple_qinco.f16_d8_e16384", paper_url="https://arxiv.org/abs/2501.03078")
 def SimpleQINCo_f16_d8_e16384(
         # --- encoder/decoder config ---
         img_size=256,
@@ -1301,7 +1301,7 @@ def FSQ_f16_d256_e16(**kwargs):
     return FSQ_f16_d256_e8(levels=[8, 8, 8, 5, 5, 5], **kwargs)
 
 
-@register_model(f"discrete.bsq.f16_d10_b10", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f16_d10_b10", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f16_d10_b10(
         # --- encoder/decoder config ---
         img_size=256,
@@ -1358,15 +1358,15 @@ def BSQ_f16_d10_b10(
     )
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
-@register_model(f"discrete.bsq.f8_d10_b10", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f8_d10_b10", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f8_d10_b10(**kwargs):
     return BSQ_f16_d10_b10(ch_mult=[1, 2, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f4_d10_b10", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f4_d10_b10", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f4_d10_b10(**kwargs):
     return BSQ_f16_d10_b10(ch_mult=[1, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f16_d12_b12", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f16_d12_b12", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f16_d12_b12(
         # --- encoder/decoder config ---
         img_size=256,
@@ -1423,15 +1423,15 @@ def BSQ_f16_d12_b12(
     )
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
-@register_model(f"discrete.bsq.f8_d12_b12", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f8_d12_b12", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f8_d12_b12(**kwargs):
     return BSQ_f16_d12_b12(ch_mult=[1, 2, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f4_d12_b12", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f4_d12_b12", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f4_d12_b12(**kwargs):
     return BSQ_f16_d12_b12(ch_mult=[1, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f16_d14_b14", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f16_d14_b14", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f16_d14_b14(
         # --- encoder/decoder config ---
         img_size=256,
@@ -1489,15 +1489,15 @@ def BSQ_f16_d14_b14(
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
 
-@register_model(f"discrete.bsq.f8_d14_b14", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f8_d14_b14", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f8_d14_b14(**kwargs):
     return BSQ_f16_d14_b14(ch_mult=[1, 2, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f4_d14_b14", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f4_d14_b14", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f4_d14_b14(**kwargs):
     return BSQ_f16_d14_b14(ch_mult=[1, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f16_d16_b16", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f16_d16_b16", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f16_d16_b16(
         # --- encoder/decoder config ---
         img_size=256,
@@ -1554,15 +1554,15 @@ def BSQ_f16_d16_b16(
     )
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
-@register_model(f"discrete.bsq.f8_d16_b16", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f8_d16_b16", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f8_d16_b16(**kwargs):
     return BSQ_f16_d16_b16(ch_mult=[1, 2, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f4_d16_b16", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f4_d16_b16", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f4_d16_b16(**kwargs):
     return BSQ_f16_d16_b16(ch_mult=[1, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f16_d18_b18", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f16_d18_b18", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f16_d18_b18(
         # --- encoder/decoder config ---
         img_size=256,
@@ -1619,11 +1619,11 @@ def BSQ_f16_d18_b18(
     )
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
-@register_model(f"discrete.bsq.f8_d18_b18", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f8_d18_b18", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f8_d18_b18(**kwargs):
     return BSQ_f16_d18_b18(ch_mult=[1, 2, 2, 4], **kwargs)
 
-@register_model(f"discrete.bsq.f4_d18_b18", paper_url="https://arxiv.org/abs/2501.05737")
+@register_model(f"discrete.bsq.f4_d18_b18", paper_url="https://arxiv.org/abs/2406.07548")
 def BSQ_f4_d18_b18(**kwargs):
     return BSQ_f16_d18_b18(ch_mult=[1, 2, 4], **kwargs)
 
@@ -1829,20 +1829,20 @@ def RQVAE_f16_d8_e16384(
     )
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
-@register_model(f"discrete.rsimple_qinco.f4_d3_e8192")
+@register_model(f"discrete.rsimple_qinco.f4_d3_e8192", paper_url="https://arxiv.org/abs/2501.03078")
 def RSimpleQINCo_f4_d3_e8192(**kwargs):
     return RQVAE_f4_d3_e8192(**kwargs, quantizer_class=SimpleQINCo)
 
-@register_model(f"discrete.rsimple_qinco.f8_d4_e16384")
+@register_model(f"discrete.rsimple_qinco.f8_d4_e16384", paper_url="https://arxiv.org/abs/2501.03078")
 def RSimpleQINCo_f8_d4_e16384(**kwargs):
     return RQVAE_f8_d4_e16384(**kwargs, quantizer_class=SimpleQINCo)
 
-@register_model(f"discrete.rsimple_qinco.f16_d8_e16384")
+@register_model(f"discrete.rsimple_qinco.f16_d8_e16384", paper_url="https://arxiv.org/abs/2501.03078")
 def RSimpleQINCo_f16_d8_e16384(**kwargs):
     return RQVAE_f16_d8_e16384(**kwargs, quantizer_class=SimpleQINCo)
 
 
-@register_model(f"discrete.qinco.f4_d3_e8192")
+@register_model(f"discrete.qinco.f4_d3_e8192", paper_url="https://arxiv.org/abs/2501.03078")
 def QINCo_f4_d3_e8192(
     # --- encoder/decoder config ---
         img_size=256,
@@ -1916,7 +1916,7 @@ def QINCo_f4_d3_e8192(
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
 
-@register_model(f"discrete.qinco.f8_d4_e16384")
+@register_model(f"discrete.qinco.f8_d4_e16384", paper_url="https://arxiv.org/abs/2501.03078")
 def QINCo_f8_d4_e16384(
     # --- encoder/decoder config ---
         img_size=256,
@@ -1989,7 +1989,7 @@ def QINCo_f8_d4_e16384(
     )
     return VQModel(encoder, decoder, quantizer, **kwargs)
 
-@register_model(f"discrete.qinco.f16_d8_e16384")
+@register_model(f"discrete.qinco.f16_d8_e16384", paper_url="https://arxiv.org/abs/2501.03078")
 def QINCo_f16_d8_e16384(
     # --- encoder/decoder config ---
         img_size=256,

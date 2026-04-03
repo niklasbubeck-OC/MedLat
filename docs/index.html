@@ -920,7 +920,7 @@ sched = create_scheduler(<span class="s">"flow"</span>,     path_type=<span clas
             </tr>
             <tr>
               <th scope="row">SoftVQ / WQVAE</th>
-              <td>Continuous wrappers with soft or warped quantization — <code>continuous.soft_vq.*</code> (with optional DINOv2/BiomedCLIP alignment), <code>continuous.wqvae.f8_d4_e16384</code> <a href="https://arxiv.org/abs/2412.09628" target="_blank" rel="noopener" style="color:var(--med);font-size:0.82rem">→ paper</a></td>
+              <td>Continuous wrappers with soft or warped quantization — <code>continuous.soft_vq.*</code> (with optional DINOv2/BiomedCLIP alignment), <code>continuous.wqvae.f8_d4_e16384</code> <a href="https://arxiv.org/abs/2412.10958" target="_blank" rel="noopener" style="color:var(--med);font-size:0.82rem">→ paper</a></td>
             </tr>
           </tbody>
         </table>
@@ -944,7 +944,7 @@ sched = create_scheduler(<span class="s">"flow"</span>,     path_type=<span clas
           <span class="tag tag-disc">BSQ</span>
           <strong>Binary Spherical Quant.</strong>
           <span>Binary representation on the sphere. Same sweep as LFQ. <code>discrete.bsq.*</code></span>
-          <a href="https://arxiv.org/abs/2501.05737" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ BSQ paper</a>
+          <a href="https://arxiv.org/abs/2406.07548" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ BSQ paper</a>
         </article>
         <article class="mini-card">
           <span class="tag tag-disc">FSQ</span>
@@ -968,7 +968,7 @@ sched = create_scheduler(<span class="s">"flow"</span>,     path_type=<span clas
           <span class="tag tag-disc">QINCo</span>
           <strong>QINCo family</strong>
           <span>Improved nearest-code quantizers and residual variants. <code>discrete.simple_qinco.*</code>, <code>discrete.qinco.*</code></span>
-          <a href="https://arxiv.org/abs/2404.02905" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ QINCo paper</a>
+          <a href="https://arxiv.org/abs/2501.03078" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ QINCo paper</a>
         </article>
         <article class="mini-card">
           <span class="tag tag-disc">HCVQ</span>
@@ -991,9 +991,19 @@ sched = create_scheduler(<span class="s">"flow"</span>,     path_type=<span clas
           <a href="https://arxiv.org/abs/2502.03444" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ MAETok paper</a>
         </article>
         <article class="mini-card">
-          <strong>VMAE · DeTok · SoftVQ · ViTA</strong>
-          <span>ViT-based and scale-grid tokenizers. <code>token.vmae.*</code>, <code>token.detok.*</code>, <code>token.vita.*</code></span>
-          <a href="https://arxiv.org/abs/2203.12602" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ VideoMAE paper</a>
+          <strong>VMAE</strong>
+          <span>ViT/VideoMAE-style encoder tokenizer. <code>token.vmae.*</code></span>
+          <a href="https://arxiv.org/abs/2510.23606" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ VMAE paper</a>
+        </article>
+        <article class="mini-card">
+          <strong>DeTok</strong>
+          <span>Scale-grid tokenizer (ss / sb / … / xlxl). <code>token.detok.*</code></span>
+          <a href="https://arxiv.org/abs/2507.15856" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ DeTok paper</a>
+        </article>
+        <article class="mini-card">
+          <strong>SoftVQ · ViTA</strong>
+          <span>Differentiable soft VQ tokenizer and ViT-based reconstruction AE. <code>token.softvq.*</code>, <code>token.vita.*</code></span>
+          <a href="https://arxiv.org/abs/2412.10958" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--med)">→ SoftVQ paper</a>
         </article>
       </div>
     </section>
@@ -1052,7 +1062,7 @@ sched = create_scheduler(<span class="s">"flow"</span>,     path_type=<span clas
           <span class="tag tag-ar">FractalGen</span>
           <strong>fractal.ar_64 · fractal.mar_64 · fractal.mar_base/large/huge_256</strong>
           <span>Hierarchical fractal AR: multi-level MAR or AR cascade that progressively refines predictions. Requires a custom hierarchical training loop.</span>
-          <a href="https://arxiv.org/abs/2501.05372" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--accent-2)">→ FractalGen paper</a>
+          <a href="https://github.com/LTH14/fractalgen" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--accent-2)">→ FractalGen code</a>
         </article>
       </div>
 
@@ -1068,7 +1078,7 @@ sched = create_scheduler(<span class="s">"flow"</span>,     path_type=<span clas
           <span class="tag tag-gen">MDT</span>
           <strong>mdt.s/b/l/xl × _2/_4</strong>
           <span>Masked Diffusion Transformer — encoder-decoder with masked side branches. 8 configs. Strong scaling on smaller latent grids.</span>
-          <a href="https://arxiv.org/abs/2303.04155" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--accent-2)">→ MDT paper</a>
+          <a href="https://arxiv.org/abs/2303.14389" target="_blank" rel="noopener" style="display:block;margin-top:0.5rem;font-size:0.78rem;color:var(--accent-2)">→ MDT paper</a>
         </article>
         <article class="mini-card">
           <span class="tag tag-gen">UViT</span>

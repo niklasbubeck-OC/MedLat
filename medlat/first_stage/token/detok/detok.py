@@ -590,52 +590,52 @@ class DeTok(nn.Module):
 # Model Factory Functions
 # ================================
 
-@register_model("token.detok.ss")
+@register_model("token.detok.ss", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_SS(**kwargs) -> DeTok:
     return DeTok(enc_width=512, dec_width=512, enc_depth=8, dec_depth=8, enc_num_heads=8, dec_num_heads=8, **kwargs)
 
 
-@register_model("token.detok.sb")
+@register_model("token.detok.sb", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_SB(**kwargs) -> DeTok:
     return DeTok(enc_width=512, dec_width=768, enc_depth=8, dec_depth=12, enc_num_heads=8, dec_num_heads=12, **kwargs)
 
 
-@register_model("token.detok.sl")
+@register_model("token.detok.sl", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_SL(**kwargs) -> DeTok:
     return DeTok(enc_width=512, dec_width=1024, enc_depth=8, dec_depth=24, enc_num_heads=8, dec_num_heads=16, **kwargs)
 
 
-@register_model("token.detok.bs")
+@register_model("token.detok.bs", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_BS(**kwargs) -> DeTok:
     return DeTok(enc_width=768, dec_width=512, enc_depth=12, dec_depth=8, enc_num_heads=12, dec_num_heads=8, **kwargs)
 
 
-@register_model("token.detok.bb")
+@register_model("token.detok.bb", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_BB(**kwargs) -> DeTok:
     return DeTok(enc_width=768, dec_width=768, enc_depth=12, dec_depth=12, enc_num_heads=12, dec_num_heads=12, **kwargs)
 
 
-@register_model("token.detok.bl")
+@register_model("token.detok.bl", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_BL(**kwargs) -> DeTok:
     return DeTok(enc_width=768, dec_width=1024, enc_depth=12, dec_depth=24, enc_num_heads=12, dec_num_heads=16, **kwargs)
 
 
-@register_model("token.detok.ls")
+@register_model("token.detok.ls", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_LS(**kwargs) -> DeTok:
     return DeTok(enc_width=1024, dec_width=512, enc_depth=24, dec_depth=8, enc_num_heads=16, dec_num_heads=8, **kwargs)
 
 
-@register_model("token.detok.lb")
+@register_model("token.detok.lb", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_LB(**kwargs) -> DeTok:
     return DeTok(enc_width=1024, dec_width=768, enc_depth=24, dec_depth=12, enc_num_heads=16, dec_num_heads=12, **kwargs)
 
 
-@register_model("token.detok.ll")
+@register_model("token.detok.ll", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_LL(**kwargs) -> DeTok:
     return DeTok(enc_width=1024, dec_width=1024, enc_depth=24, dec_depth=24, enc_num_heads=16, dec_num_heads=16, **kwargs)
 
 
-@register_model("token.detok.xlxl")
+@register_model("token.detok.xlxl", paper_url="https://arxiv.org/abs/2507.15856")
 def detok_XLXL(**kwargs) -> DeTok:
     return DeTok(enc_width=1152, dec_width=1152, enc_depth=28, dec_depth=28, enc_num_heads=16, dec_num_heads=16, **kwargs)
 

@@ -210,7 +210,7 @@ def MAETok_L_512(**kwargs):
 
 ###### SoftVQ #######
 
-@register_model("token.softvq.s_t32_d32", paper_url="https://arxiv.org/abs/2412.09628")
+@register_model("token.softvq.s_t32_d32", paper_url="https://arxiv.org/abs/2412.10958")
 def SoftVQ_S_T32_D32(
     img_size: int = 256,
     patch_size: int = 16,
@@ -281,7 +281,7 @@ def SoftVQ_S_T32_D32(
     alignment = DinoAlignment(decoder=aux_dino_decoder, codebook_embed_dim=e_dim, img_size=img_size)
     return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, alignment=alignment, pre_post_layer="linear", **kwargs)
 
-@register_model("token.softvq.s_t64_d32", paper_url="https://arxiv.org/abs/2412.09628")
+@register_model("token.softvq.s_t64_d32", paper_url="https://arxiv.org/abs/2412.10958")
 def SoftVQ_S_T64_D32(
     img_size: int = 256,
     patch_size: int = 16,
@@ -353,7 +353,7 @@ def SoftVQ_S_T64_D32(
     return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, alignment=alignment, pre_post_layer="linear", **kwargs)
 
 
-@register_model("token.softvq.b_t32_d32", paper_url="https://arxiv.org/abs/2412.09628")
+@register_model("token.softvq.b_t32_d32", paper_url="https://arxiv.org/abs/2412.10958")
 def SoftVQ_B_T32_D32(
     img_size: int = 256,
     patch_size: int = 16,
@@ -424,7 +424,7 @@ def SoftVQ_B_T32_D32(
     alignment = DinoAlignment(decoder=aux_dino_decoder, codebook_embed_dim=e_dim, img_size=img_size)
     return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, alignment=alignment, pre_post_layer="linear", **kwargs)
 
-@register_model("token.softvq.b_t64_d32", paper_url="https://arxiv.org/abs/2412.09628")
+@register_model("token.softvq.b_t64_d32", paper_url="https://arxiv.org/abs/2412.10958")
 def SoftVQ_B_T64_D32(
     img_size: int = 256,
     patch_size: int = 16,
@@ -495,7 +495,7 @@ def SoftVQ_B_T64_D32(
     alignment = DinoAlignment(decoder=aux_dino_decoder, codebook_embed_dim=e_dim, img_size=img_size)
     return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, alignment=alignment, pre_post_layer="linear", **kwargs)
 
-@register_model("token.softvq.bl_t32_d32", paper_url="https://arxiv.org/abs/2412.09628")
+@register_model("token.softvq.bl_t32_d32", paper_url="https://arxiv.org/abs/2412.10958")
 def SoftVQ_BL_T32_D32(
     img_size: int = 256,
     patch_size: int = 16,
@@ -566,7 +566,7 @@ def SoftVQ_BL_T32_D32(
     alignment = DinoAlignment(decoder=aux_dino_decoder, codebook_embed_dim=e_dim, img_size=img_size)
     return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, alignment=alignment, pre_post_layer="linear", **kwargs)
 
-@register_model("token.softvq.bl_t64_d32", paper_url="https://arxiv.org/abs/2412.09628")
+@register_model("token.softvq.bl_t64_d32", paper_url="https://arxiv.org/abs/2412.10958")
 def SoftVQ_BL_T64_D32(
     img_size: int = 256,
     patch_size: int = 16,
@@ -637,7 +637,7 @@ def SoftVQ_BL_T64_D32(
     alignment = DinoAlignment(decoder=aux_dino_decoder, codebook_embed_dim=e_dim, img_size=img_size)
     return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, alignment=alignment, **kwargs)
 
-@register_model("token.softvq.l_t32_d32", paper_url="https://arxiv.org/abs/2412.09628")
+@register_model("token.softvq.l_t32_d32", paper_url="https://arxiv.org/abs/2412.10958")
 def SoftVQ_L_T32_D32(
     img_size: int = 256,
     patch_size: int = 16,
@@ -708,7 +708,7 @@ def SoftVQ_L_T32_D32(
     alignment = DinoAlignment(decoder=aux_dino_decoder, codebook_embed_dim=e_dim, img_size=img_size)
     return VQModel(encoder=encoder, decoder=decoder, quantizer=quantizer, alignment=alignment, pre_post_layer="linear", **kwargs)
 
-@register_model("token.softvq.l_t64_d32", paper_url="https://arxiv.org/abs/2412.09628")
+@register_model("token.softvq.l_t64_d32", paper_url="https://arxiv.org/abs/2412.10958")
 def SoftVQ_L_T64_D32(
     img_size: int = 256,
     patch_size: int = 16,
