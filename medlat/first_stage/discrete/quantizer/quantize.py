@@ -221,11 +221,13 @@ class AbstractQuantizer(nn.Module, ABC):
     Subclasses implement one required method:
 
     * :meth:`forward` — quantize a batch and return a 3-tuple
-      ``(z_q, loss, info)``. ``z_q`` is the quantized feature map with the
-      same spatial shape as the input. ``loss`` is a scalar commitment /
-      entropy loss. ``info`` is a 3-tuple ``(perplexity, one_hot_or_None,
-      indices)`` — ``one_hot`` may be ``None`` when it would be prohibitively
-      large (e.g. LFQ over 2**18 codes).
+      ``(z_q, loss, indices)``. ``z_q`` is the quantized feature map with the
+      same spatial shape as the input; ``loss`` is a scalar commitment /
+      entropy loss; ``indices`` is an integer ``Tensor`` of codebook indices
+      for single-level quantizers, or a ``List[Tensor]`` of per-level indices
+      for residual variants. Diagnostics (``perplexity``, one-hot encodings,
+      per-level components) are surfaced via :meth:`log_metric` /
+      :meth:`get_metrics` rather than the return value.
 
     And optionally override:
 
@@ -266,7 +268,9 @@ class AbstractQuantizer(nn.Module, ABC):
       any codebook rows whose hit count is below ``dead_code_threshold`` are
       overwritten with random samples from that batch. No-op for
       codebook-free classes (LFQ / BSQ / FSQ) that have no learnable
-      ``nn.Embedding``.
+      ``nn.Embedding``. Set :attr:`revive_dead_codes_after` at construction
+      to have the quantizer auto-call this every N forward passes during
+      training — no need to wire it into your own loop.
     * :meth:`entropy_regularization` — opt-in SoftVQ-style entropy loss term,
       the formula shared by every quantizer in the family. Configured via
       :attr:`entropy_loss_weight`, :attr:`entropy_loss_temperature`, and
@@ -302,6 +306,14 @@ class AbstractQuantizer(nn.Module, ABC):
     #: classes (LFQ / BSQ / SoftVQ) that historically owned this config.
     entropy_gamma: float = 1.0
 
+    #: if > 0, :meth:`revive_dead_codes` is called automatically every N
+    #: forward passes during training, using the first positional argument of
+    #: ``forward`` as the encoder activation pool. ``0`` (default) disables
+    #: auto-revival entirely — call :meth:`revive_dead_codes` yourself from
+    #: the training loop. Requires a learnable ``nn.Embedding`` codebook and
+    #: a populated usage buffer (i.e. at least one prior forward pass).
+    revive_dead_codes_after: int = 0
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         # Only wrap classes that define their own ``forward`` (a concrete
@@ -318,7 +330,7 @@ class AbstractQuantizer(nn.Module, ABC):
                 # Never let instrumentation failures bubble up — they must be
                 # invisible to the training pipeline.
                 try:
-                    self._post_forward(output)
+                    self._post_forward(output, args, kwargs)
                 except Exception as exc:  # pragma: no cover — defensive
                     logger.debug(
                         "Quantizer instrumentation hook raised %s: %s",
@@ -332,14 +344,20 @@ class AbstractQuantizer(nn.Module, ABC):
     @abstractmethod
     def forward(
         self, z: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, Tuple[Any, Any, Any]]:
-        """Quantize ``z`` and return ``(z_q, loss, (perplexity, one_hot, indices))``.
+    ) -> Tuple[torch.Tensor, torch.Tensor, Union[torch.Tensor, List[torch.Tensor]]]:
+        """Quantize ``z`` and return ``(z_q, loss, indices)``.
 
-        Implementations must preserve the input's batch and spatial shape on
-        ``z_q``. ``loss`` is a scalar tensor suitable for
-        ``.backward()``. ``perplexity`` is a scalar tensor measuring codebook
-        utilization; ``one_hot`` is either a ``(N, n_e)`` one-hot tensor or
-        ``None``; ``indices`` is a tensor of integer codebook indices.
+        * ``z_q`` preserves the input's batch and spatial shape.
+        * ``loss`` is a scalar tensor suitable for ``.backward()``.
+        * ``indices`` is an integer ``Tensor`` of codebook indices for
+          single-level quantizers, or a ``List[Tensor]`` of per-level indices
+          for residual / multi-level quantizers.
+
+        Diagnostics that used to ride along in the info tuple (``perplexity``,
+        one-hot encodings, per-level components) are now surfaced via
+        :meth:`log_metric` and :meth:`get_metrics`; the post-forward hook
+        computes :math:`H` automatically from ``indices`` for every
+        single-level quantizer, so subclasses do not need to re-expose it.
         """
 
     def get_codebook_entry(
@@ -408,33 +426,106 @@ class AbstractQuantizer(nn.Module, ABC):
             self._usage_buffer.zero_()
 
     # ------------------------------------------------------------------
-    # Post-forward hook — extracts info tuple for auto-logging.
+    # Post-forward hook — extracts indices for auto-logging.
     # ------------------------------------------------------------------
 
-    def _post_forward(self, output: Any) -> None:
+    def _post_forward(
+        self,
+        output: Any,
+        args: Tuple[Any, ...] = (),
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Called automatically after every ``forward`` with its return value.
 
-        Unpacks ``(z_q, loss, info)`` defensively: non-standard return shapes
-        (Gumbel's ``return_logits=True`` 4-tuple, residual variants' per-level
-        lists) are tolerated and simply skip the features that don't apply.
+        Unpacks ``(z_q, loss, indices)`` defensively: ``indices`` may be a
+        single ``Tensor`` (single-level quantizers), a ``list`` / ``tuple`` of
+        per-level ``Tensor``s (residual variants), or ``None``. An optional
+        trailing element (Gumbel's ``return_logits=True`` 4-tuple) is ignored.
+
+        Responsibilities:
+
+        * Populate ``loss`` and ``perplexity`` in the metric dict.
+        * Update the codebook usage buffer when ``indices`` is a ``Tensor``.
+        * When :attr:`revive_dead_codes_after` is set, auto-call
+          :meth:`revive_dead_codes` every N forward passes during training,
+          passing the first positional ``forward`` argument as the encoder
+          activation pool.
+
+        ``args`` is the positional arg tuple that the wrapped forward was
+        called with — we need ``args[0]`` (typically ``z``) for auto-revival.
         """
         if not isinstance(output, tuple) or len(output) < 3:
             return
-        _z_q, loss, info = output[0], output[1], output[2]
+        _z_q, loss, indices = output[0], output[1], output[2]
 
-        # Always log loss if present as a scalar tensor
         if isinstance(loss, torch.Tensor) and loss.dim() == 0:
             self.log_metric("loss", loss.detach())
 
-        if not isinstance(info, (tuple, list)) or len(info) < 3:
+        if isinstance(indices, torch.Tensor):
+            # Single-level quantizer — log `perplexity` + update usage buffer.
+            self._log_perplexity_from_indices(indices, self._n_e_safe(), "perplexity")
+            if self.track_usage:
+                self._update_usage(indices)
+        elif isinstance(indices, (list, tuple)):
+            # Residual / multi-level — per-level perplexity under
+            # `perplexity_level_{i}`. Codebook size is looked up per level
+            # when a ``self.levels`` module list is available, otherwise the
+            # wrapper's ``n_e`` is reused (common for shared-codebook variants).
+            levels = getattr(self, "levels", None)
+            fallback_n_e = self._n_e_safe()
+            for i, level_idx in enumerate(indices):
+                if not isinstance(level_idx, torch.Tensor):
+                    continue
+                level_n_e = fallback_n_e
+                if levels is not None:
+                    try:
+                        level_n_e = int(levels[i].n_e)
+                    except (AttributeError, IndexError, TypeError):
+                        pass
+                self._log_perplexity_from_indices(
+                    level_idx, level_n_e, f"perplexity_level_{i}"
+                )
+
+        # ── Auto-revive dead codes on a fixed cadence ─────────────────────
+        if (
+            self.revive_dead_codes_after > 0
+            and self.training
+            and args
+            and isinstance(args[0], torch.Tensor)
+        ):
+            # Lazily create the counter on first use so existing models that
+            # don't set revive_dead_codes_after don't carry a stale counter.
+            count = getattr(self, "_forward_count", 0) + 1
+            self._forward_count = count
+            if count % self.revive_dead_codes_after == 0:
+                n_revived = self.revive_dead_codes(args[0])
+                if n_revived > 0:
+                    self.log_metric("codes_revived", n_revived)
+
+    def _n_e_safe(self) -> int:
+        """Best-effort int read of ``self.n_e``; returns 0 if unavailable."""
+        try:
+            return int(self.n_e)
+        except (AttributeError, TypeError):
+            return 0
+
+    def _log_perplexity_from_indices(
+        self, indices: torch.Tensor, n_e: int, key: str
+    ) -> None:
+        """Compute perplexity from a ``(..., )`` long-tensor and log it under ``key``.
+
+        Silently skips when ``n_e <= 0`` or ``indices`` is empty, so residual
+        variants with missing/invalid per-level configs don't crash the hook.
+        """
+        if n_e <= 0:
             return
-        perplexity, _one_hot, indices = info[0], info[1], info[2]
-
-        if isinstance(perplexity, torch.Tensor):
-            self.log_metric("perplexity", perplexity.detach())
-
-        if self.track_usage and isinstance(indices, torch.Tensor):
-            self._update_usage(indices)
+        flat = indices.detach().flatten().long()
+        if flat.numel() == 0:
+            return
+        flat = flat.clamp(0, n_e - 1)
+        counts = torch.bincount(flat, minlength=n_e).to(torch.float32)
+        probs = counts / counts.sum().clamp_min(1.0)
+        self.log_metric(key, compute_perplexity(probs).detach())
 
     # ------------------------------------------------------------------
     # Usage tracking — lazily-allocated buffer.
@@ -601,14 +692,11 @@ class ResidualQuantizerBase(AbstractQuantizer, ABC):
 
     Covers :class:`ResidualQuantizer`, :class:`QincoResidualQuantizer`,
     :class:`MultiScaleResidualQuantizer` (and its 3D variant), and
-    :class:`WaveletResidualQuantizer`. These share a different
-    :meth:`forward` return shape from single-stage quantizers — the ``info``
-    tuple carries **per-level** data:
-
-    ``(z_q, loss, (per_level_perplexity, per_level_quantized, per_level_indices))``
-
-    where each list has length equal to the number of residual levels. The
-    ``z_q`` tensor is the summed/composed result ready for decoding.
+    :class:`WaveletResidualQuantizer`. Their ``forward`` return shape differs
+    from single-stage quantizers only in the last slot: ``indices`` is a
+    ``List[Tensor]`` (one entry per residual level) rather than a single
+    ``Tensor``. The ``z_q`` tensor is still the summed/composed result ready
+    for decoding, and the ``loss`` is still a scalar.
 
     Subclasses additionally expose:
 
@@ -690,7 +778,7 @@ class VectorQuantizer(AbstractQuantizer):
         # reshape back to match original input shape
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
 
-        return z_q, loss, (perplexity, min_encodings, min_encoding_indices)
+        return z_q, loss, min_encoding_indices
 
     def get_codebook_entry(self, indices, shape):
         # shape specifying (batch, height, width, channel)
@@ -804,8 +892,8 @@ class GumbelQuantize(AbstractQuantizer):
             ind = self.remap_to_used(ind)
         if self.use_vqinterface:
             if return_logits:
-                return z_q, diff, (None, None, ind), logits
-            return z_q, diff, (None, None, ind)
+                return z_q, diff, ind, logits
+            return z_q, diff, ind
         return z_q, diff, ind
 
     def get_codebook_entry(self, indices, shape):
@@ -841,10 +929,6 @@ class VectorQuantizer2(AbstractQuantizer):
         use_ema=False,
         ema_decay=0.99,
         ema_eps=1e-5,
-        # ---- Entropy regularization (shared SoftVQ-style helper) ----
-        # Renamed from the legacy kwargs entropy_loss_ratio / entropy_loss_type /
-        # entropy_temperature. The old kwargs are accepted as aliases for
-        # backward compat via **legacy_kwargs below.
         entropy_loss_weight: float = 0.0,
         entropy_loss_temperature: float = 1.0,
         entropy_gamma: float = 1.0,
@@ -918,12 +1002,8 @@ class VectorQuantizer2(AbstractQuantizer):
                    self.beta * torch.mean((z_q - z.detach()) ** 2)
         else:
             loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-                   torch.mean((z_q - z.detach()) ** 2)
+                    torch.mean((z_q - z.detach()) ** 2)
 
-        # Entropy regularization via the shared base-class helper. Uses the
-        # SoftVQ-style MaskGIT loss, ``weight * (per_sample - gamma·avg)``,
-        # computed over softmax(-d / T). Gated on self.training; returns zero
-        # otherwise. Enable via ``entropy_loss_weight > 0`` at construction.
         loss = loss + self.entropy_regularization(-d)
 
         # Rotation trick or STE
@@ -932,7 +1012,7 @@ class VectorQuantizer2(AbstractQuantizer):
         # Restore shape (channel-first)
         z_q = unflatten_spatial_to_channel_first(z_q)
 
-        return z_q, loss, (perplexity, None, min_indices)
+        return z_q, loss, min_indices
 
     def get_codebook_entry(self, indices, shape=None):
         z_q = self.embedding(indices)
@@ -1067,7 +1147,7 @@ class QINCo(nn.Module):
 
         indices = indices.view(-1)
 
-        return z_q, loss, (perplexity, None, indices)
+        return z_q, loss, indices
 
 
 class SimVQ(AbstractQuantizer):
@@ -1145,7 +1225,7 @@ class SimVQ(AbstractQuantizer):
         z_q = z_q_flat.view(z.shape)
         z_q = unflatten_spatial_to_channel_first(z_q, contiguous=True)
 
-        return z_q, loss, (None, None, indices)
+        return z_q, loss, indices
 
 
     def get_codebook_entry(self, indices, shape=None):
@@ -1206,7 +1286,6 @@ class ResidualQuantizer(ResidualQuantizerBase):
         quantized_outputs = []
         losses = []
         all_indices = []
-        all_perplexities = []
 
         # -------- Determine dropout level ----------------------------------------------
         # During training, randomly skip fine quantizers
@@ -1230,19 +1309,17 @@ class ResidualQuantizer(ResidualQuantizerBase):
                 # output placeholder
                 quantized_outputs.append(torch.zeros_like(residual))
                 losses.append(torch.tensor(0.0, device=x.device))
-                all_perplexities.append(None)
                 all_indices.append(torch.full_like(residual[..., 0], -1, dtype=torch.long))
                 continue
 
             # ---------------------------------------------------------
             # ACTIVE quantizer
             # ---------------------------------------------------------
-            z_q, loss, (perplexity, _, indices) = q(residual)
+            z_q, loss, indices = q(residual)
 
             quantized_outputs.append(z_q)
             losses.append(loss)
             all_indices.append(indices)
-            all_perplexities.append(perplexity)
 
             # Residual refinement (correct for STE quantizers)
             residual = residual - z_q.detach()
@@ -1251,7 +1328,7 @@ class ResidualQuantizer(ResidualQuantizerBase):
         final_quantized = sum(quantized_outputs)
         total_loss = sum(losses)
 
-        return final_quantized, total_loss, (all_perplexities, quantized_outputs, all_indices)
+        return final_quantized, total_loss, all_indices
 
     def get_codebook_entry(self, indices, shape=None):
         """
@@ -1360,7 +1437,6 @@ class QincoResidualQuantizer(ResidualQuantizerBase):
         quantized_outputs = []
         losses = []
         all_indices = []
-        all_perplexities = []
 
         # dropout level
         if self.training and self.quantize_dropout and self.num_quantizers > 1:
@@ -1377,17 +1453,15 @@ class QincoResidualQuantizer(ResidualQuantizerBase):
             if i >= dropout_level:
                 quantized_outputs.append(torch.zeros_like(residual))
                 losses.append(torch.tensor(0.0, device=x.device))
-                all_perplexities.append(None)
                 all_indices.append(torch.full_like(residual[..., 0], -1, dtype=torch.long))
                 continue
 
             # QINCo: quantizer sees residual and x_prev (partial reconstruction)
-            z_q, loss, (perplexity, _, indices) = q(residual, x_prev=x_prev)
+            z_q, loss, indices = q(residual, x_prev=x_prev)
 
             quantized_outputs.append(z_q)
             losses.append(loss)
             all_indices.append(indices)
-            all_perplexities.append(perplexity)
 
             # update partial reconstruction
             x_prev = x_prev + z_q
@@ -1398,7 +1472,7 @@ class QincoResidualQuantizer(ResidualQuantizerBase):
         final_quantized = sum(quantized_outputs)
         total_loss = sum(losses)
 
-        return final_quantized, total_loss, (all_perplexities, quantized_outputs, all_indices)
+        return final_quantized, total_loss, all_indices
 
 @register_model(f"{_REGISTRY_PREFIX}grouped_residual_quantizer",
     code_url="https://github.com/yangdongchao/AcademiCodec",
@@ -1463,13 +1537,13 @@ class GroupedVQ(AbstractQuantizer):
         # 2) Apply VQ to each group independently
         group_results = []
         for group_x, vq in zip(x_groups, self.vqs):
-            q, loss, extras = vq(group_x)
-            group_results.append((q, loss, extras))
+            q, loss, indices = vq(group_x)
+            group_results.append((q, loss, indices))
 
         # 3) Unpack results
-        quantized_list   = [r[0] for r in group_results]
-        losses_list      = [r[1] for r in group_results]
-        extras_list      = [r[2] for r in group_results]
+        quantized_list = [r[0] for r in group_results]
+        losses_list    = [r[1] for r in group_results]
+        all_indices    = [r[2] for r in group_results]
 
         # 4) Concatenate quantized outputs across groups
         quantized = torch.cat(quantized_list, dim=self.split_dim)
@@ -1477,15 +1551,10 @@ class GroupedVQ(AbstractQuantizer):
         # 5) Combine losses
         total_loss = sum(losses_list)
 
-        # 6) Stack metadata cleanly
-        all_perplexities  = [e[0] for e in extras_list]
-        all_quantized_lvls = [e[1] for e in extras_list]
-        all_indices       = [e[2] for e in extras_list]
-
         # Restore shape (channel-first)
         quantized = unflatten_spatial_to_channel_first(quantized)
 
-        return quantized, total_loss, (all_perplexities, all_quantized_lvls, all_indices)
+        return quantized, total_loss, all_indices
 
 
 @register_model(f"{_REGISTRY_PREFIX}msrq_vector_quantizer2",
@@ -1614,7 +1683,7 @@ class MultiScaleResidualQuantizer(ResidualQuantizerBase):
         perplexity = compute_perplexity(torch.mean(encodings, dim=0))
         
         # Return in the same format as other quantizers
-        return f_hat, mean_vq_loss, (perplexity, encodings, encoding_indices_list[-1])
+        return f_hat, mean_vq_loss, encoding_indices_list
     # ===================== `forward` is only used in VAE training =====================
     
     def embed_to_fhat(self, ms_h_BChw: List[torch.Tensor], all_to_max_scale=True, last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
@@ -1931,7 +2000,7 @@ class MultiScaleResidualQuantizer3D(ResidualQuantizerBase):
             else:
                 f_hat = rearrange(f_hat, 'b c d h w -> b (d h w) c', d=self.patch_sizes[-1][0], h=self.patch_sizes[-1][1], w=self.patch_sizes[-1][2])
         # Return in the same format as other quantizers
-        return f_hat, mean_vq_loss, (perplexity, encodings, encoding_indices_list[-1])
+        return f_hat, mean_vq_loss, encoding_indices_list
     # ===================== `forward` is only used in VAE training =====================
     
     def embed_to_fhat(self, ms_h_BChw: List[torch.Tensor], all_to_max_scale=True, last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
@@ -2152,7 +2221,7 @@ class LookupFreeQuantizer(AbstractQuantizer):
         )
 
         # return z_quantized, result_dict # Old return
-        return z_q, loss, (per_sample_entropy, None, min_encoding_indices) # We don't have one_hot encodings here
+        return z_q, loss, min_encoding_indices
 
     def get_codebook_entry(self, indices: torch.Tensor, shape=None) -> torch.Tensor:
         """
@@ -2229,7 +2298,7 @@ class BinarySphericalQuantizer(LookupFreeQuantizer):
         # Reshape back (z_q.ndim matches orig_ndim, so helper dispatches correctly)
         z_q = unflatten_spatial_to_channel_first(z_q, contiguous=True)
 
-        return z_q, loss, (per_sample_entropy, None, min_encoding_indices)
+        return z_q, loss, min_encoding_indices
 
 
 @register_model(f"{_REGISTRY_PREFIX}finite_scalar_quantizer",
@@ -2337,7 +2406,7 @@ class FiniteScalarQuantizer(AbstractQuantizer):
     def forward(self, z: torch.Tensor):
         """
         z: (B, C, H, W) or (B, C, D, H, W) or (..., in_dim)
-        returns: (z_q, loss, (perplexity, None, indices))
+        returns: (z_q, loss, indices)
         """
         orig_ndim = z.ndim
         z = z.float()
@@ -2401,7 +2470,7 @@ class FiniteScalarQuantizer(AbstractQuantizer):
 
         loss = commitment_loss
 
-        return z_q, loss, (perplexity, None, indices)
+        return z_q, loss, indices
 
 
 @register_model(f"{_REGISTRY_PREFIX}soft_vector_quantizer",
@@ -2488,11 +2557,7 @@ class SoftVectorQuantizer(AbstractQuantizer):
         # Restore shape (channel-first)
         z_q = unflatten_spatial_to_channel_first(z_q)
         
-        return z_q, entropy_loss, (
-            None, # perplexity,
-            None,
-            indices
-        )
+        return z_q, entropy_loss, indices
 
 
 class WaveletResidualQuantizer(ResidualQuantizerBase):
@@ -2579,7 +2644,6 @@ class WaveletResidualQuantizer(ResidualQuantizerBase):
         quantized_outputs = []
         losses = []
         all_indices = []
-        all_perplexities = []
 
         dropout_level = self.num_quantizers
         if self.training and self.quantize_dropout and self.num_quantizers > 1:
@@ -2590,11 +2654,10 @@ class WaveletResidualQuantizer(ResidualQuantizerBase):
                 q_out = torch.zeros_like(sb)
                 losses.append(torch.tensor(0.0, device=x.device))
             else:
-                z_q, loss, (perplexity, _, indices) = q(sb)
+                z_q, loss, indices = q(sb)
                 q_out = z_q
                 losses.append(loss)
                 all_indices.append(indices)
-                all_perplexities.append(perplexity)
             
             quantized_outputs.append(q_out)
         
@@ -2602,7 +2665,7 @@ class WaveletResidualQuantizer(ResidualQuantizerBase):
         
         total_loss = sum(losses)
         
-        return final_quantized, total_loss, (all_perplexities, quantized_outputs, all_indices)
+        return final_quantized, total_loss, all_indices
     
     def get_codebook_entry(self, indices, shape=None):
         # Identical to original RQ-VAE implementation

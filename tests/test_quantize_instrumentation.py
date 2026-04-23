@@ -93,43 +93,44 @@ def test_forward_auto_logged_values_update_on_each_call():
 
 
 def test_hook_is_defensive_against_nonstandard_return_shapes():
-    # Some quantizers return 4-tuples (Gumbel with return_logits=True) or
-    # include non-Tensor elements in the info tuple (residual quantizers).
-    # _post_forward must never raise for any of these — it's called from
-    # every forward and a crash would break training.
+    # _post_forward must never raise — it's called from every forward and
+    # any crash in it would break training. The new return contract is
+    # ``(z_q, loss, indices)`` where ``indices`` is a Tensor, list, or None.
     m = qn.VectorQuantizer(n_e=4, e_dim=2, beta=0.25)
 
     # Short tuple — should silently skip.
     m._post_forward((torch.zeros(1), torch.tensor(0.0)))
     # Non-tuple return — should silently skip.
     m._post_forward(torch.zeros(1))
-    # info is None — should silently skip the info branch but still log loss.
+    # indices is None — should silently skip but still log loss.
     m._post_forward((torch.zeros(1), torch.tensor(0.5), None))
     assert m.get_metrics()["loss"].item() == pytest.approx(0.5)
-    # info is a list with list-valued elements (residual style) — must not
-    # attempt to detach a list as if it were a tensor.
+    # indices is a list (residual variants emit a per-level list) — must not
+    # attempt to treat the list as a Tensor.
     m._post_forward(
         (
             torch.zeros(1),
             torch.tensor(0.7),
-            ([torch.tensor(1.0)], [torch.zeros(2)], [torch.zeros(3, dtype=torch.long)]),
+            [torch.zeros(3, dtype=torch.long), torch.zeros(3, dtype=torch.long)],
         )
     )
     # loss overwritten with the latest value.
     assert m.get_metrics()["loss"].item() == pytest.approx(0.7)
     # 4-tuple (Gumbel return_logits=True shape) — hook only reads the first
-    # three elements, ignoring the extra.
+    # three elements, ignoring the extra logits tensor.
     m._post_forward(
         (
             torch.zeros(1),
             torch.tensor(0.9),
-            (torch.tensor(2.0), None, torch.zeros(5, dtype=torch.long)),
+            torch.tensor([0, 1, 2, 3], dtype=torch.long),
             torch.zeros(7),  # extra logits-like element
         )
     )
     snap = m.get_metrics()
     assert snap["loss"].item() == pytest.approx(0.9)
-    assert snap["perplexity"].item() == pytest.approx(2.0)
+    # Perplexity is now derived from indices via bincount, so a fully-used
+    # codebook (each code hit once) gives perplexity == n_e.
+    assert snap["perplexity"].item() == pytest.approx(4.0)
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +216,25 @@ def test_reset_usage_zeroes_buffer():
     assert m._usage_buffer.sum().item() > 0
     m.reset_usage()
     assert m._usage_buffer.sum().item() == 0
+
+
+def test_residual_quantizer_logs_per_level_perplexity():
+    # Every residual wrapper should surface perplexity_level_{i} metrics for
+    # each level's indices so training-loop logging sees utilization per level.
+    r = qn.ResidualQuantizer(
+        quantizer_class=qn.VectorQuantizer2,
+        num_quantizers=3,
+        quantizer_kwargs_list=[{"n_e": 4, "e_dim": 3}] * 3,
+    ).eval()
+    x = torch.randn(1, 3, 2, 2, generator=torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        r(x)
+    snap = r.get_metrics()
+    assert "perplexity_level_0" in snap
+    assert "perplexity_level_1" in snap
+    assert "perplexity_level_2" in snap
+    # Aggregated 'perplexity' key is reserved for single-level quantizers.
+    assert "perplexity" not in snap
 
 
 def test_residual_quantizer_list_indices_do_not_crash_hook():
@@ -318,6 +338,67 @@ def test_revive_resets_usage_to_threshold_for_revived_codes():
     # them as dead immediately.
     assert int(m._usage_buffer[1].item()) == m.dead_code_threshold
     assert int(m._usage_buffer[4].item()) == m.dead_code_threshold
+
+
+def test_auto_revive_disabled_by_default():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).train()
+    assert m.revive_dead_codes_after == 0
+    with torch.no_grad():
+        for _ in range(5):
+            m(torch.randn(1, 4, 2, 2))
+    # No auto-revival counter spun up, no codes_revived metric logged.
+    assert not hasattr(m, "_forward_count")
+    assert "codes_revived" not in m.get_metrics()
+
+
+def test_auto_revive_fires_on_configured_cadence():
+    # Configure every 3 forwards; seed the buffer with dead codes after the
+    # very first call, then verify that revival triggers on the 3rd forward.
+    torch.manual_seed(0)
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).train()
+    m.revive_dead_codes_after = 3
+
+    # First forward populates the usage buffer.
+    m(torch.randn(2, 4, 2, 2, generator=torch.Generator().manual_seed(0)))
+    # Zero out the buffer so every code looks dead.
+    m._usage_buffer.fill_(0)
+    assert m._forward_count == 1
+
+    # Second forward — counter advances but revival threshold not yet hit.
+    m(torch.randn(2, 4, 2, 2, generator=torch.Generator().manual_seed(1)))
+    assert m._forward_count == 2
+    # No codes_revived metric yet because revival hasn't fired this batch.
+    # (The counter may have re-populated some entries in the buffer though,
+    # so we don't assert it's still all-zero — only that revival hasn't run.)
+    assert "codes_revived" not in m.get_metrics()
+
+    # Zero again to guarantee dead codes when the cadence hits.
+    m._usage_buffer.fill_(0)
+    m(torch.randn(2, 4, 2, 2, generator=torch.Generator().manual_seed(2)))
+    assert m._forward_count == 3
+    # Revival ran — codes_revived metric should show up.
+    assert "codes_revived" in m.get_metrics()
+    assert m.get_metrics()["codes_revived"] > 0
+
+
+def test_auto_revive_skipped_in_eval_mode():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    m.revive_dead_codes_after = 1
+    with torch.no_grad():
+        for _ in range(3):
+            m(torch.randn(1, 4, 2, 2))
+    # Training gate ensures no revival counter is spun up in eval.
+    assert not hasattr(m, "_forward_count")
+
+
+def test_auto_revive_skipped_for_codebook_free_classes():
+    # LookupFreeQuantizer has no nn.Embedding, so revive_dead_codes is a
+    # no-op for it; the counter still advances but no codes are ever revived.
+    m = qn.LookupFreeQuantizer(token_bits=4).train()
+    m.revive_dead_codes_after = 1
+    m(torch.randn(1, 4, 2, 2))
+    # No codes_revived metric because revive_dead_codes returned 0.
+    assert "codes_revived" not in m.get_metrics()
 
 
 def test_revive_accepts_any_shape_with_matching_trailing_dim():
