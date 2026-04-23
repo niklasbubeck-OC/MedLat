@@ -30,12 +30,13 @@ from medlat.first_stage.discrete.quantizer.quantize import (
     unflatten_spatial_to_channel_first,
 )
 from medlat.modules.alignments import AlignmentModule
+from medlat.modules.metrics import MetricLoggerMixin
 from medlat.utils import init_from_ckpt
 
 __all__ = ["VQModel", "VQModelTransformer"]
 
 
-class VQModelBase(DiscreteFirstStage):
+class VQModelBase(MetricLoggerMixin, DiscreteFirstStage):
     """Shared plumbing for VQ-family autoencoders.
 
     Concrete subclasses supply the pre/post-quant layer construction via
@@ -43,6 +44,16 @@ class VQModelBase(DiscreteFirstStage):
     state (e.g. masking info), override :meth:`_run_encoder` and
     :meth:`_run_decoder` to route that state through without leaking it into
     the public interface.
+
+    Observability
+    -------------
+    Inherits ``log_metric`` / ``get_metrics`` / ``reset_metrics`` from
+    :class:`MetricLoggerMixin`. :meth:`forward` auto-logs ``"loss"``,
+    ``"commitment_loss"``, and (when configured) ``"alignment_loss"``.
+    :meth:`get_metrics` is overridden to merge the underlying quantizer's
+    metrics (``"perplexity"``, ``"dead_code_ratio"``, …) into the same flat
+    snapshot — training loops can do ``wandb.log(model.get_metrics())`` and
+    get every signal from both layers at once.
     """
 
     def __init__(
@@ -191,17 +202,46 @@ class VQModelBase(DiscreteFirstStage):
         the alignment contribution — that is intentional since alignment
         depends on having both the encoded quant and the original input in
         scope at the same time.
+
+        Three metrics are logged via :meth:`log_metric` on every call, so
+        ``model.get_metrics()`` surfaces them without the caller having to
+        dig into the loss tensor:
+
+        * ``"commitment_loss"`` — the quantizer's returned ``diff`` before
+          alignment is added.
+        * ``"alignment_loss"`` — only logged when ``self.alignment`` is set.
+        * ``"loss"`` — the final scalar returned from this method.
         """
         quant, diff, ind = self.encode(input)
         dec = self.decode(quant)
 
+        # Record the pre-alignment commitment loss before we fold alignment in.
+        self.log_metric("commitment_loss", diff.detach())
+
         if self.alignment is not None:
             alignment_loss, _ = self.alignment(quant, input)
+            self.log_metric("alignment_loss", alignment_loss.detach())
             diff = diff + alignment_loss
 
         if return_pred_indices:
             return dec, diff, ind
         return dec, diff
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Merge VQModel-level metrics with the underlying quantizer's snapshot.
+
+        Precedence: model-level metrics win on key collisions, so
+        ``"loss"`` reflects the total (commitment + alignment) computed in
+        :meth:`forward`, not the bare commitment loss the quantizer publishes
+        under the same key. Quantizer-exclusive fields like ``"perplexity"``,
+        ``"dead_code_ratio"``, and ``"active_code_count"`` come through
+        unchanged.
+        """
+        merged = super().get_metrics()  # model-level via MetricLoggerMixin
+        if hasattr(self.quantizer, "get_metrics"):
+            for k, v in self.quantizer.get_metrics().items():
+                merged.setdefault(k, v)
+        return merged
 
 
 # ---------------------------------------------------------------------------

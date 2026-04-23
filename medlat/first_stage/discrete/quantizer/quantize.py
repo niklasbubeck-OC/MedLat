@@ -34,6 +34,8 @@ from torch.amp import autocast
 
 from medlat.registry import register_model
 
+from medlat.modules.metrics import MetricLoggerMixin
+
 from .modules import *
 
 logger = logging.getLogger(__name__)
@@ -198,7 +200,7 @@ def straight_through_estimator(
 # ---------------------------------------------------------------------------
 
 
-class AbstractQuantizer(nn.Module, ABC):
+class AbstractQuantizer(nn.Module, MetricLoggerMixin, ABC):
     """Shared contract for every quantizer in MedLat.
 
     The family includes classical VQ-VAE / VQ-GAN (:class:`VectorQuantizer`,
@@ -432,29 +434,19 @@ class AbstractQuantizer(nn.Module, ABC):
         )
 
     # ------------------------------------------------------------------
-    # Metric logger — latest-only, no buffering.
+    # Metric logger — ``log_metric``, ``reset_metrics`` inherited from
+    # :class:`MetricLoggerMixin`. Only ``get_metrics`` is overridden so it
+    # can add codebook-usage-derived fields on top of the base snapshot.
     # ------------------------------------------------------------------
 
-    def log_metric(self, key: str, value: Any) -> None:
-        """Record the latest value for ``key``; overwrites any prior value.
-
-        Tensor values are detached (a new leaf with the same data) so that
-        logging cannot hold onto a computation graph. Non-tensor values pass
-        through unchanged.
-        """
-        if not hasattr(self, "_metrics"):
-            self._metrics: Dict[str, Any] = {}
-        if isinstance(value, torch.Tensor):
-            value = value.detach()
-        self._metrics[key] = value
-
     def get_metrics(self) -> Dict[str, Any]:
-        """Return a snapshot of the latest logged metrics + derived usage stats.
+        """Latest logged metrics + codebook-usage derived stats.
 
-        Keys set by the user via :meth:`log_metric` and by the post-forward
-        hook (e.g. ``"perplexity"``) appear as-is. Additionally, if
-        :attr:`track_usage` is on and at least one forward has run, three
-        derived fields are included:
+        Base :meth:`~MetricLoggerMixin.get_metrics` returns anything set via
+        :meth:`log_metric` (including automatic ``"loss"`` / ``"perplexity"``
+        from :meth:`_post_forward`). On top of that, if :attr:`track_usage`
+        is on and at least one forward has run, four derived fields are
+        included:
 
         * ``active_code_count`` — codes whose cumulative hit count meets
           :attr:`dead_code_threshold`.
@@ -462,7 +454,7 @@ class AbstractQuantizer(nn.Module, ABC):
         * ``codebook_utilization`` — alias for ``1 - dead_code_ratio``.
         * ``total_tokens_seen`` — sum of all hits so far.
         """
-        snap: Dict[str, Any] = dict(getattr(self, "_metrics", {}))
+        snap = super().get_metrics()
         if hasattr(self, "_usage_buffer"):
             usage = self._usage_buffer
             alive = int((usage >= self.dead_code_threshold).sum().item())
@@ -472,11 +464,6 @@ class AbstractQuantizer(nn.Module, ABC):
             snap["codebook_utilization"] = alive / total if total > 0 else 0.0
             snap["total_tokens_seen"] = int(usage.sum().item())
         return snap
-
-    def reset_metrics(self) -> None:
-        """Clear the metric dict (but not the usage buffer)."""
-        if hasattr(self, "_metrics"):
-            self._metrics.clear()
 
     def reset_usage(self) -> None:
         """Zero the codebook usage buffer."""
