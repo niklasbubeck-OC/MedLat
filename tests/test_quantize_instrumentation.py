@@ -449,3 +449,86 @@ def test_entropy_regularization_flows_gradient_when_enabled():
     # Non-trivial gradient: the entropy term actually depends on affinity.
     assert affinity.grad is not None
     assert affinity.grad.abs().sum().item() > 0
+
+
+# ---------------------------------------------------------------------------
+# VectorQuantizer2 entropy migration — VQ2 now uses the shared helper.
+# ---------------------------------------------------------------------------
+
+
+def test_vq2_accepts_new_entropy_kwargs():
+    m = qn.VectorQuantizer2(
+        n_e=8, e_dim=4,
+        entropy_loss_weight=0.1,
+        entropy_loss_temperature=0.5,
+        entropy_gamma=1.2,
+    )
+    assert m.entropy_loss_weight == 0.1
+    assert m.entropy_loss_temperature == 0.5
+    assert m.entropy_gamma == 1.2
+
+
+def test_vq2_legacy_entropy_kwargs_still_work():
+    # Old configs that pass entropy_loss_ratio / entropy_temperature must
+    # keep functioning — they are mapped to the new attribute names.
+    m = qn.VectorQuantizer2(
+        n_e=8, e_dim=4,
+        entropy_loss_ratio=0.1,
+        entropy_temperature=0.5,
+    )
+    assert m.entropy_loss_weight == 0.1
+    assert m.entropy_loss_temperature == 0.5
+
+
+def test_vq2_legacy_entropy_loss_type_is_silently_dropped():
+    # ``entropy_loss_type="gumbel"`` path is gone; accepting the kwarg for
+    # backward compat without erroring keeps configs with that field working.
+    m = qn.VectorQuantizer2(
+        n_e=8, e_dim=4,
+        entropy_loss_ratio=0.1,
+        entropy_loss_type="gumbel",   # silently ignored
+    )
+    assert m.entropy_loss_weight == 0.1
+    assert not hasattr(m, "entropy_loss_type")
+
+
+def test_vq2_unknown_kwarg_still_raises():
+    with pytest.raises(TypeError, match="unexpected kwargs"):
+        qn.VectorQuantizer2(n_e=8, e_dim=4, bogus_setting=42)
+
+
+def test_vq2_entropy_contributes_to_loss_in_training_mode():
+    m = qn.VectorQuantizer2(n_e=16, e_dim=4, entropy_loss_weight=0.1).train()
+    x = torch.randn(2, 4, 3, 3, generator=torch.Generator().manual_seed(0))
+    _, loss, _ = m(x)
+    # With entropy reg on, the per/avg/entropy metrics should be populated.
+    snap = m.get_metrics()
+    assert "entropy_per_sample" in snap
+    assert "entropy_avg" in snap
+    assert "entropy_loss" in snap
+    # And the logged entropy_loss must equal the term actually added to loss
+    # (we can't observe the unregularized loss in isolation, but we can check
+    # the published value is non-zero).
+    assert snap["entropy_loss"].item() != 0.0
+
+
+def test_vq2_entropy_is_zero_in_eval_even_when_weight_positive():
+    m = qn.VectorQuantizer2(n_e=16, e_dim=4, entropy_loss_weight=0.1).eval()
+    x = torch.randn(2, 4, 3, 3, generator=torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        m(x)
+    snap = m.get_metrics()
+    # training-mode gate means no entropy metrics are populated in eval.
+    assert "entropy_per_sample" not in snap
+
+
+def test_vq2_clone_with_preserves_migrated_entropy_config():
+    from medlat import clone_with, get_model
+    base = get_model(
+        "discrete.quantizer.vector_quantizer2",
+        n_e=8, e_dim=4, entropy_loss_weight=0.1, entropy_gamma=1.0,
+    )
+    hotter = clone_with(base, entropy_loss_temperature=0.3)
+    assert hotter.entropy_loss_weight == 0.1
+    assert hotter.entropy_gamma == 1.0
+    assert hotter.entropy_loss_temperature == 0.3

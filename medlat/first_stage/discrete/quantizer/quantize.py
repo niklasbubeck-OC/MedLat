@@ -268,13 +268,12 @@ class AbstractQuantizer(nn.Module, ABC):
       codebook-free classes (LFQ / BSQ / FSQ) that have no learnable
       ``nn.Embedding``.
     * :meth:`entropy_regularization` — opt-in SoftVQ-style entropy loss term,
-      the formula shared by LFQ, BSQ, and SoftVQ and now available to every
-      quantizer. Configured via :attr:`entropy_loss_weight`,
-      :attr:`entropy_loss_temperature`, and :attr:`entropy_gamma`. Gated on
-      ``self.training``; returns a zero scalar otherwise. VectorQuantizer2
-      still uses its own (sign-flipped, `-1e-10` eps) internal formula and
-      is NOT migrated — setting both ``entropy_loss_ratio`` and
-      ``entropy_loss_weight`` on a VQ2 instance double-counts.
+      the formula shared by every quantizer in the family. Configured via
+      :attr:`entropy_loss_weight`, :attr:`entropy_loss_temperature`, and
+      :attr:`entropy_gamma`. Gated on ``self.training``; returns a zero scalar
+      otherwise. :class:`VectorQuantizer2` accepts its legacy kwargs
+      (``entropy_loss_ratio``, ``entropy_temperature``) as aliases for the
+      new names; ``entropy_loss_type="gumbel"`` is no longer supported.
     """
 
     #: codebook cardinality; subclasses assign in ``__init__``.
@@ -508,12 +507,13 @@ class AbstractQuantizer(nn.Module, ABC):
             Scalar tensor; zero when disabled or in eval.
 
         .. note::
-           :class:`VectorQuantizer2` has its own historical entropy formula
-           (``-ratio * mean(per_row_entropy)``) that differs in sign and in
-           its eps handling; it is intentionally **not** migrated to this
-           helper. Setting both ``entropy_loss_ratio`` (VQ2's kwarg) and
-           ``entropy_loss_weight`` (this helper's) on a VQ2 instance would
-           double-count.
+           :class:`VectorQuantizer2` historically used a different formula
+           (``-ratio * mean(per_row_entropy)``, with an optional
+           ``entropy_loss_type="gumbel"`` path). Both are gone; VQ2 now uses
+           this helper. Old kwargs (``entropy_loss_ratio`` →
+           :attr:`entropy_loss_weight`, ``entropy_temperature`` →
+           :attr:`entropy_loss_temperature`) are accepted as aliases in VQ2's
+           ``__init__``; ``entropy_loss_type`` is silently ignored.
         """
         if self.entropy_loss_weight == 0.0 or not self.training:
             zero = affinity.new_zeros(())
@@ -824,26 +824,46 @@ code_url="https://github.com/MishaLaskin/vqvae/blob/d761a999e2267766400dc646d82d
 paper_url="https://arxiv.org/abs/1711.00937",)
 class VectorQuantizer2(AbstractQuantizer):
     """
-    Improved VectorQuantizer with optional EMA, rotation trick,
-    cosine normalization, and MaskGIT-style entropy loss.
+    Improved VectorQuantizer with optional EMA, rotation trick, and cosine
+    normalization. Entropy regularization is handled by the unified
+    :meth:`AbstractQuantizer.entropy_regularization` helper — pass
+    ``entropy_loss_weight``, ``entropy_loss_temperature``, ``entropy_gamma``
+    to activate it.
     """
     def __init__(
-        self, 
-        n_e, 
-        e_dim, 
+        self,
+        n_e,
+        e_dim,
         beta=0.25,
-        legacy=True, 
+        legacy=True,
         rotation_trick=False,
-        use_norm=False, 
-        use_ema=False, 
-        ema_decay=0.99, 
+        use_norm=False,
+        use_ema=False,
+        ema_decay=0.99,
         ema_eps=1e-5,
-        # ---- NEW ENTROPY OPTIONS as in MaskGITs ----
-        entropy_loss_ratio=0.0,
-        entropy_loss_type="softmax",   # ["softmax", "gumbel"]
-        entropy_temperature=1.0
+        # ---- Entropy regularization (shared SoftVQ-style helper) ----
+        # Renamed from the legacy kwargs entropy_loss_ratio / entropy_loss_type /
+        # entropy_temperature. The old kwargs are accepted as aliases for
+        # backward compat via **legacy_kwargs below.
+        entropy_loss_weight: float = 0.0,
+        entropy_loss_temperature: float = 1.0,
+        entropy_gamma: float = 1.0,
+        **legacy_kwargs,
     ):
         super().__init__()
+        # Translate pre-migration kwargs so existing configs keep working.
+        # `entropy_loss_type` is silently dropped — the unified formula does
+        # not support the gumbel variant.
+        if "entropy_loss_ratio" in legacy_kwargs:
+            entropy_loss_weight = legacy_kwargs.pop("entropy_loss_ratio")
+        if "entropy_temperature" in legacy_kwargs:
+            entropy_loss_temperature = legacy_kwargs.pop("entropy_temperature")
+        legacy_kwargs.pop("entropy_loss_type", None)
+        if legacy_kwargs:
+            raise TypeError(
+                f"VectorQuantizer2: unexpected kwargs {sorted(legacy_kwargs)}"
+            )
+
         self.n_e = n_e
         self.e_dim = e_dim
         self.norm = lambda x: F.normalize(x, dim=-1) if use_norm else x
@@ -852,11 +872,12 @@ class VectorQuantizer2(AbstractQuantizer):
         self.rotation_trick = rotation_trick
         self.use_ema = use_ema
 
-        # Entropy hyperparameters
-        self.entropy_loss_ratio = entropy_loss_ratio
-        self.entropy_loss_type = entropy_loss_type
-        self.entropy_temperature = entropy_temperature
-        
+        # Entropy regularization hyperparameters (consumed by the base-class
+        # helper self.entropy_regularization; zero weight = disabled).
+        self.entropy_loss_weight = entropy_loss_weight
+        self.entropy_loss_temperature = entropy_loss_temperature
+        self.entropy_gamma = entropy_gamma
+
         if use_ema:
             self.embedding = EmbeddingEMA(self.n_e, self.e_dim, ema_decay, ema_eps)
         else:
@@ -899,28 +920,11 @@ class VectorQuantizer2(AbstractQuantizer):
             loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + \
                    torch.mean((z_q - z.detach()) ** 2)
 
-        # ---------------------------
-        #       ENTROPY LOSS  
-        # ---------------------------
-        entropy_loss = torch.tensor(0.0, device=z.device)
-
-        if self.entropy_loss_ratio > 0:
-            logits = -d  # MaskGIT uses negative distances as logits
-
-            if self.entropy_loss_type == "softmax":
-                probs = F.softmax(logits / self.entropy_temperature, dim=-1)
-            elif self.entropy_loss_type == "gumbel":
-                probs = F.gumbel_softmax(logits, tau=self.entropy_temperature, hard=False)
-            else:
-                raise ValueError(f"Invalid entropy_loss_type: {self.entropy_loss_type}")
-
-            # Entropy = -Σ p log p
-            entropy = -torch.sum(probs * torch.log(probs + 1e-10), dim=-1)
-
-            # MaskGIT penalizes *low entropy* (i.e., encourages diversity)
-            entropy_loss = -entropy.mean() * self.entropy_loss_ratio
-
-            loss = loss + entropy_loss
+        # Entropy regularization via the shared base-class helper. Uses the
+        # SoftVQ-style MaskGIT loss, ``weight * (per_sample - gamma·avg)``,
+        # computed over softmax(-d / T). Gated on self.training; returns zero
+        # otherwise. Enable via ``entropy_loss_weight > 0`` at construction.
+        loss = loss + self.entropy_regularization(-d)
 
         # Rotation trick or STE
         z_q = straight_through_estimator(z, z_q, use_rotation_trick=self.rotation_trick)
