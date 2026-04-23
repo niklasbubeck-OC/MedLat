@@ -361,10 +361,10 @@ def test_entropy_regularization_preserves_dtype_and_device():
 def test_entropy_regularization_matches_modules_helper_when_enabled():
     from medlat.first_stage.discrete.quantizer.modules import entropy_loss_fn
 
-    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).train()
     m.entropy_loss_weight = 0.5
     m.entropy_loss_temperature = 0.8
-    m.entropy_loss_gamma = 1.2
+    m.entropy_gamma = 1.2
 
     affinity = torch.randn(12, 8, generator=torch.Generator().manual_seed(7))
 
@@ -379,11 +379,22 @@ def test_entropy_regularization_matches_modules_helper_when_enabled():
     torch.testing.assert_close(actual, expected)
 
 
+def test_entropy_regularization_returns_zero_in_eval_mode():
+    # The helper is gated on self.training to match SoftVQ / BSQ behavior.
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    m.entropy_loss_weight = 0.5
+    affinity = torch.randn(6, 8)
+    out = m.entropy_regularization(affinity)
+    assert out.item() == 0.0
+    # And nothing should be logged.
+    assert "entropy_per_sample" not in m.get_metrics()
+
+
 def test_entropy_regularization_does_not_mutate_affinity():
     # Defensive: the helper clones before calling into modules.entropy_loss_fn,
     # which contains an in-place `flat_affinity /= temperature`. Callers that
     # reuse the affinity tensor downstream must see it unchanged.
-    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).train()
     m.entropy_loss_weight = 1.0
     m.entropy_loss_temperature = 0.5
     affinity = torch.randn(6, 8, generator=torch.Generator().manual_seed(0))
@@ -393,7 +404,7 @@ def test_entropy_regularization_does_not_mutate_affinity():
 
 
 def test_entropy_regularization_logs_components_as_metrics():
-    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).train()
     m.entropy_loss_weight = 0.1
     affinity = torch.randn(6, 8, generator=torch.Generator().manual_seed(1))
     m.entropy_regularization(affinity)
@@ -401,13 +412,15 @@ def test_entropy_regularization_logs_components_as_metrics():
     snap = m.get_metrics()
     assert "entropy_per_sample" in snap
     assert "entropy_avg" in snap
+    assert "entropy_loss" in snap
     # Values are detached (no grad graph).
     assert snap["entropy_per_sample"].grad_fn is None
     assert snap["entropy_avg"].grad_fn is None
+    assert snap["entropy_loss"].grad_fn is None
 
 
 def test_entropy_regularization_does_not_log_when_disabled():
-    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).train()
     # Default: weight is 0 → skip the log.
     affinity = torch.randn(6, 8)
     m.entropy_regularization(affinity)
@@ -419,7 +432,7 @@ def test_entropy_regularization_does_not_log_when_disabled():
 def test_entropy_regularization_accepts_affinity_of_arbitrary_batch_shape():
     # The helper internally reshapes to (-1, n_e), so callers can pass any
     # shape as long as the last dim is the codebook dimension.
-    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).train()
     m.entropy_loss_weight = 1.0
     aff = torch.randn(2, 3, 4, 8, generator=torch.Generator().manual_seed(0))
     out = m.entropy_regularization(aff)
@@ -428,7 +441,7 @@ def test_entropy_regularization_accepts_affinity_of_arbitrary_batch_shape():
 
 
 def test_entropy_regularization_flows_gradient_when_enabled():
-    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).train()
     m.entropy_loss_weight = 0.5
     affinity = torch.randn(4, 8, requires_grad=True)
     loss = m.entropy_regularization(affinity)

@@ -267,13 +267,14 @@ class AbstractQuantizer(nn.Module, ABC):
       overwritten with random samples from that batch. No-op for
       codebook-free classes (LFQ / BSQ / FSQ) that have no learnable
       ``nn.Embedding``.
-    * :meth:`entropy_regularization` — opt-in MaskGIT-style entropy loss term.
-      Configured via :attr:`entropy_loss_weight` / :attr:`entropy_loss_temperature`
-      / :attr:`entropy_loss_gamma`. Returns a zero scalar when disabled, so
-      subclasses can always chain ``loss = loss + self.entropy_regularization(aff)``
-      unconditionally. Four existing classes (VQ2, LFQ, BSQ, SoftVQ) compute
-      their own entropy loss internally; do not set ``entropy_loss_weight > 0``
-      on those or you'll double-count.
+    * :meth:`entropy_regularization` — opt-in SoftVQ-style entropy loss term,
+      the formula shared by LFQ, BSQ, and SoftVQ and now available to every
+      quantizer. Configured via :attr:`entropy_loss_weight`,
+      :attr:`entropy_loss_temperature`, and :attr:`entropy_gamma`. Gated on
+      ``self.training``; returns a zero scalar otherwise. VectorQuantizer2
+      still uses its own (sign-flipped, `-1e-10` eps) internal formula and
+      is NOT migrated — setting both ``entropy_loss_ratio`` and
+      ``entropy_loss_weight`` on a VQ2 instance double-counts.
     """
 
     #: codebook cardinality; subclasses assign in ``__init__``.
@@ -290,15 +291,17 @@ class AbstractQuantizer(nn.Module, ABC):
     #: weight on the MaskGIT-style entropy regularization term. ``0.0`` (the
     #: default) disables it entirely and :meth:`entropy_regularization` returns
     #: a zero scalar. Subclasses that want the regularizer call the method
-    #: from their :meth:`forward`; nothing is wired automatically.
+    #: from their :meth:`forward`; LookupFreeQuantizer, BinarySphericalQuantizer,
+    #: and SoftVectorQuantizer already do.
     entropy_loss_weight: float = 0.0
     #: softmax temperature used when deriving a probability distribution from
     #: the affinity matrix supplied to :meth:`entropy_regularization`.
     entropy_loss_temperature: float = 1.0
-    #: weighting on the ``avg_entropy`` component. The full loss term is
-    #: ``per_sample_entropy - entropy_loss_gamma * avg_entropy``: higher
-    #: ``gamma`` pushes harder against codebook collapse.
-    entropy_loss_gamma: float = 1.0
+    #: weighting applied to the batch-averaged ``avg_entropy`` component inside
+    #: :func:`entropy_loss_fn`. Higher ``gamma`` pushes harder against codebook
+    #: collapse. Attribute name matches the constructor kwarg on the concrete
+    #: classes (LFQ / BSQ / SoftVQ) that historically owned this config.
+    entropy_gamma: float = 1.0
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -471,45 +474,54 @@ class AbstractQuantizer(nn.Module, ABC):
     # ------------------------------------------------------------------
 
     def entropy_regularization(self, affinity: torch.Tensor) -> torch.Tensor:
-        """Compute a MaskGIT-style entropy regularization term.
+        """Canonical entropy regularization term, shared by every quantizer.
 
-        Opt-in: returns a zero scalar when :attr:`entropy_loss_weight` is zero.
-        Subclasses call this from their :meth:`forward` and add the result to
-        their commitment loss::
+        This is the formula previously duplicated inside
+        :class:`LookupFreeQuantizer`, :class:`BinarySphericalQuantizer`, and
+        :class:`SoftVectorQuantizer`. It is now lifted into the base class so
+        any quantizer can pick it up with a single call in its ``forward``::
 
-            affinity = -distances               # or raw logits
+            affinity = -distances               # or raw logits for soft variants
             loss = loss + self.entropy_regularization(affinity)
 
-        The regularizer encourages confident per-sample assignments while
-        preventing codebook collapse. See
-        :func:`medlat.first_stage.discrete.quantizer.modules.entropy_loss_fn`
-        for the raw formula; this wrapper applies
-        :attr:`entropy_loss_weight`, stashes the per-sample and averaged
-        components under metric keys ``"entropy_per_sample"`` /
-        ``"entropy_avg"``, and returns ``weight * (per_sample - gamma·avg)``.
+        The math matches :func:`medlat.first_stage.discrete.quantizer.modules.entropy_loss_fn`:
+
+        .. math::
+           L_{\\text{ent}} = w \\cdot \\bigl(H_{\\text{per-sample}}
+           - \\gamma \\cdot H_{\\text{avg}}\\bigr)
+
+        where :math:`w` is :attr:`entropy_loss_weight`, :math:`\\gamma` is
+        :attr:`entropy_gamma`, and the two entropies are computed over
+        softmax(``affinity`` / :attr:`entropy_loss_temperature``).
+
+        The helper is **gated on** ``self.training`` — returning a zero scalar
+        in eval — to match SoftVQ / BSQ semantics. Also short-circuits to zero
+        when :attr:`entropy_loss_weight` is zero, so callers can always chain
+        ``loss + self.entropy_regularization(aff)`` unconditionally.
 
         Args:
-            affinity: any ``(..., n_e)`` tensor whose last dim corresponds
-                to the codebook. For hard-argmin quantizers, pass ``-d`` where
-                ``d`` is the squared-L2 distance matrix; for soft quantizers,
-                pass the raw logits.
+            affinity: ``(..., n_e)`` tensor whose last dim is the codebook
+                dimension. For hard-argmin quantizers pass ``-d`` (negative
+                squared-L2 distances); for soft quantizers pass raw logits.
 
         Returns:
-            Scalar tensor, weighted and ready to add to the commitment loss.
-            When the feature is disabled, the returned tensor is a zero on
-            ``affinity``'s device and dtype (so the call is safe to unconditionally
-            chain into ``loss + self.entropy_regularization(...)``).
+            Scalar tensor; zero when disabled or in eval.
 
         .. note::
-           :class:`VectorQuantizer2`, :class:`LookupFreeQuantizer`,
-           :class:`BinarySphericalQuantizer`, and :class:`SoftVectorQuantizer`
-           already compute their own entropy loss inside ``forward``. If you
-           also set ``entropy_loss_weight > 0`` on one of those classes, the
-           regularization would be applied twice — adjust the weights or pick
-           one side.
+           :class:`VectorQuantizer2` has its own historical entropy formula
+           (``-ratio * mean(per_row_entropy)``) that differs in sign and in
+           its eps handling; it is intentionally **not** migrated to this
+           helper. Setting both ``entropy_loss_ratio`` (VQ2's kwarg) and
+           ``entropy_loss_weight`` (this helper's) on a VQ2 instance would
+           double-count.
         """
-        if self.entropy_loss_weight <= 0.0:
-            return affinity.new_zeros(())
+        if self.entropy_loss_weight == 0.0 or not self.training:
+            zero = affinity.new_zeros(())
+            # Also populate the components cache so callers that include
+            # per_sample / avg in their info tuple don't need a separate
+            # code path for the disabled case.
+            self._last_entropy_info = (zero, zero, zero)
+            return zero
 
         # ``entropy_loss_fn`` mutates its ``affinity`` argument in place
         # (``flat_affinity /= temperature``). Clone so callers can reuse the
@@ -517,11 +529,16 @@ class AbstractQuantizer(nn.Module, ABC):
         per_sample, avg = entropy_loss_fn(
             affinity.clone(),
             temperature=self.entropy_loss_temperature,
-            entropy_gamma=self.entropy_loss_gamma,
+            entropy_gamma=self.entropy_gamma,
         )
         self.log_metric("entropy_per_sample", per_sample.detach())
         self.log_metric("entropy_avg", avg.detach())
-        return self.entropy_loss_weight * (per_sample - avg)
+        entropy_loss = self.entropy_loss_weight * (per_sample - avg)
+        self.log_metric("entropy_loss", entropy_loss.detach())
+        # Stash non-detached components for callers (LFQ / BSQ) that include
+        # them in their forward return tuple. Access via ``self._last_entropy_info``.
+        self._last_entropy_info = (entropy_loss, per_sample, avg)
+        return entropy_loss
 
     # ------------------------------------------------------------------
     # Dead-code revival.
@@ -2101,16 +2118,16 @@ class LookupFreeQuantizer(AbstractQuantizer):
 
         # compute loss for embedding
         commitment_loss = self.commitment_cost * torch.mean((z_quantized.detach() - z) **2)
-        entropy_loss = torch.zeros((), device=z.device)
-        per_sample_entropy = torch.zeros((), device=z.device)
-        avg_entropy = torch.zeros((), device=z.device)
 
-        # Use entropy loss on the codebook
+        # Entropy regularization via the shared base-class helper (opt-in via
+        # ``entropy_loss_weight``; gated on ``self.training``). Skip the
+        # affinity computation entirely when the feature is disabled.
         if self.entropy_loss_weight != 0.0 and self.training:
             d = -2 * torch.einsum('... c, n c -> ... n', z, self.codebook)
-
-            per_sample_entropy, avg_entropy = entropy_loss_fn(-1*d, self.entropy_loss_temperature, self.entropy_gamma)
-            entropy_loss = self.entropy_loss_weight * (per_sample_entropy - avg_entropy)
+            entropy_loss = self.entropy_regularization(-1 * d)
+        else:
+            entropy_loss = self.entropy_regularization(z)   # short-circuits; populates cache
+        _, per_sample_entropy, avg_entropy = self._last_entropy_info
 
         loss = commitment_loss + entropy_loss
 
@@ -2191,15 +2208,14 @@ class BinarySphericalQuantizer(LookupFreeQuantizer):
         # Losses (use unit sphere reference)
         commitment_loss = self.commitment_cost * F.mse_loss(z_quantized.detach(), z_unit)
         
-        # Entropy on normalized input (better soft quantization)
-        entropy_loss = torch.zeros((), device=z.device)
-        per_sample_entropy = torch.zeros((), device=z.device)
-        avg_entropy = torch.zeros((), device=z.device)
-        
+        # Entropy regularization via the shared base-class helper. BSQ uses the
+        # normalized input (``z_unit``) for a better soft-quantization signal.
         if self.entropy_loss_weight != 0.0 and self.training:
             d = -2 * torch.einsum('... c, n c -> ... n', z_unit, self.codebook)
-            per_sample_entropy, avg_entropy = entropy_loss_fn(-d, self.entropy_loss_temperature, self.entropy_gamma)
-            entropy_loss = self.entropy_loss_weight * (per_sample_entropy - avg_entropy)
+            entropy_loss = self.entropy_regularization(-d)
+        else:
+            entropy_loss = self.entropy_regularization(z_unit)   # short-circuits; populates cache
+        _, per_sample_entropy, avg_entropy = self._last_entropy_info
 
         loss = commitment_loss + entropy_loss
 
@@ -2456,17 +2472,10 @@ class SoftVectorQuantizer(AbstractQuantizer):
         # Get indices for usage tracking
         indices = torch.argmax(probs, dim=-1)  # (N,)
         
-        # Calculate losses if training
-        # Use entropy loss on the codebook
-        if self.entropy_loss_weight != 0.0 and self.training:
-            per_sample_entropy, avg_entropy = entropy_loss_fn(
-                logits, 
-                self.entropy_loss_temperature,
-                self.entropy_gamma,
-            )
-            entropy_loss = self.entropy_loss_weight * (per_sample_entropy - avg_entropy)
-        else:
-            entropy_loss = torch.tensor(0.0, device=z.device)
+        # Entropy regularization via the shared base-class helper (opt-in via
+        # ``entropy_loss_weight``; gated on ``self.training``; returns zero
+        # otherwise). Canonical formula for the whole quantizer family.
+        entropy_loss = self.entropy_regularization(logits)
         
         # Calculate average probabilities  ==> just info no need
         avg_probs = torch.mean(torch.mean(probs, dim=-1))
