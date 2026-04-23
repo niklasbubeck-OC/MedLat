@@ -426,6 +426,36 @@ def test_auto_revive_fires_on_configured_cadence():
     assert m.get_metrics()["codes_revived"] > 0
 
 
+def test_auto_revive_rolls_the_usage_window():
+    # With revive_dead_codes_after=N, the usage buffer should represent hits
+    # in the LAST N forwards, not lifetime cumulative counts. Verified by
+    # checking that the buffer is zeroed right after each revival tick.
+    torch.manual_seed(0)
+    m = qn.VectorQuantizer(
+        n_e=8, e_dim=4, beta=0.25,
+        revive_dead_codes_after=3,
+    ).train()
+
+    # Forwards 1 and 2: buffer accumulates, no revival.
+    m(torch.randn(2, 4, 2, 2, generator=torch.Generator().manual_seed(1)))
+    assert int(m._usage_buffer.sum().item()) > 0, "buffer accumulating mid-window"
+    m(torch.randn(2, 4, 2, 2, generator=torch.Generator().manual_seed(2)))
+    pre_revival_total = int(m._usage_buffer.sum().item())
+    assert pre_revival_total > 0
+
+    # Forward 3: revival fires, THEN buffer is reset for the next window.
+    m(torch.randn(2, 4, 2, 2, generator=torch.Generator().manual_seed(3)))
+    assert m._forward_count == 3
+    assert int(m._usage_buffer.sum().item()) == 0, (
+        "buffer must reset after each revival so the next revival uses "
+        "recent-window data, not lifetime cumulative counts"
+    )
+
+    # Forward 4 fills the new window.
+    m(torch.randn(2, 4, 2, 2, generator=torch.Generator().manual_seed(4)))
+    assert int(m._usage_buffer.sum().item()) > 0, "window refilling after reset"
+
+
 def test_auto_revive_skipped_in_eval_mode():
     m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
     m.revive_dead_codes_after = 1

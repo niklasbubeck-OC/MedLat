@@ -326,6 +326,12 @@ class AbstractQuantizer(nn.Module, ABC):
     #: auto-revival entirely — call :meth:`revive_dead_codes` yourself from
     #: the training loop. Requires a learnable ``nn.Embedding`` codebook and
     #: a populated usage buffer (i.e. at least one prior forward pass).
+    #:
+    #: When auto-revival is enabled, :attr:`_usage_buffer` is also reset
+    #: after every revival tick so the *next* decision is based on the
+    #: coming N forwards rather than lifetime cumulative counts. This turns
+    #: the buffer into a rolling window of length ``revive_dead_codes_after``
+    #: for dead-code purposes. Disabled (``0``) keeps the buffer cumulative.
     revive_dead_codes_after: int = 0
 
     #: Instrumentation kwargs that every subclass ``__init__`` implicitly
@@ -553,6 +559,12 @@ class AbstractQuantizer(nn.Module, ABC):
                 n_revived = self.revive_dead_codes(args[0])
                 if n_revived > 0:
                     self.log_metric("codes_revived", n_revived)
+                # Roll the usage window: the buffer now represents "hits in
+                # the last `revive_dead_codes_after` forwards". Without this
+                # reset it would be cumulative since creation, letting a code
+                # hit once on step 5 stay "alive" forever — which is usually
+                # not what users want when configuring periodic revival.
+                self.reset_usage()
 
     def _n_e_safe(self) -> int:
         """Best-effort int read of ``self.n_e``; returns 0 if unavailable."""
