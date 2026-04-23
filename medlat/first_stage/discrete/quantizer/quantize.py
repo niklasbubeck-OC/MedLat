@@ -275,9 +275,10 @@ class AbstractQuantizer(nn.Module, ABC):
       the formula shared by every quantizer in the family. Configured via
       :attr:`entropy_loss_weight`, :attr:`entropy_loss_temperature`, and
       :attr:`entropy_gamma`. Gated on ``self.training``; returns a zero scalar
-      otherwise. :class:`VectorQuantizer2` accepts its legacy kwargs
-      (``entropy_loss_ratio``, ``entropy_temperature``) as aliases for the
-      new names; ``entropy_loss_type="gumbel"`` is no longer supported.
+      otherwise. :class:`VectorQuantizer2` historically exposed different
+      entropy kwargs (``entropy_loss_ratio``, ``entropy_temperature``,
+      ``entropy_loss_type``) — those are gone; callers must pass the new
+      names.
     """
 
     #: codebook cardinality; subclasses assign in ``__init__``.
@@ -601,10 +602,10 @@ class AbstractQuantizer(nn.Module, ABC):
            :class:`VectorQuantizer2` historically used a different formula
            (``-ratio * mean(per_row_entropy)``, with an optional
            ``entropy_loss_type="gumbel"`` path). Both are gone; VQ2 now uses
-           this helper. Old kwargs (``entropy_loss_ratio`` →
-           :attr:`entropy_loss_weight`, ``entropy_temperature`` →
-           :attr:`entropy_loss_temperature`) are accepted as aliases in VQ2's
-           ``__init__``; ``entropy_loss_type`` is silently ignored.
+           this helper. Legacy kwargs (``entropy_loss_ratio``,
+           ``entropy_temperature``, ``entropy_loss_type``) were removed —
+           callers must pass the new names :attr:`entropy_loss_weight`,
+           :attr:`entropy_loss_temperature`, :attr:`entropy_gamma`.
         """
         if self.entropy_loss_weight == 0.0 or not self.training:
             zero = affinity.new_zeros(())
@@ -772,9 +773,6 @@ class VectorQuantizer(AbstractQuantizer):
         # Rotation trick (https://arxiv.org/abs/2410.06424) or classic STE
         z_q = straight_through_estimator(z, z_q, use_rotation_trick=self.rotation_trick)
 
-        # perplexity
-        perplexity = compute_perplexity(torch.mean(min_encodings, dim=0))
-
         # reshape back to match original input shape
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
 
@@ -932,22 +930,8 @@ class VectorQuantizer2(AbstractQuantizer):
         entropy_loss_weight: float = 0.0,
         entropy_loss_temperature: float = 1.0,
         entropy_gamma: float = 1.0,
-        **legacy_kwargs,
     ):
         super().__init__()
-        # Translate pre-migration kwargs so existing configs keep working.
-        # `entropy_loss_type` is silently dropped — the unified formula does
-        # not support the gumbel variant.
-        if "entropy_loss_ratio" in legacy_kwargs:
-            entropy_loss_weight = legacy_kwargs.pop("entropy_loss_ratio")
-        if "entropy_temperature" in legacy_kwargs:
-            entropy_loss_temperature = legacy_kwargs.pop("entropy_temperature")
-        legacy_kwargs.pop("entropy_loss_type", None)
-        if legacy_kwargs:
-            raise TypeError(
-                f"VectorQuantizer2: unexpected kwargs {sorted(legacy_kwargs)}"
-            )
-
         self.n_e = n_e
         self.e_dim = e_dim
         self.norm = lambda x: F.normalize(x, dim=-1) if use_norm else x
@@ -986,15 +970,10 @@ class VectorQuantizer2(AbstractQuantizer):
         z_q = self.embedding(min_indices).view_as(z)
         z_q = self.norm(z_q)
 
-        perplexity = None
-        min_encodings = None
-
         # EMA update
         if self.use_ema:
             onehot = F.one_hot(min_indices, self.n_e).type(z.dtype)
             self.embedding.perform_ema_update(onehot, z_flat, self.n_e)
-
-            perplexity = compute_perplexity(onehot.float().mean(0))
 
         # Standard VQ loss
         if self.legacy:
@@ -1140,11 +1119,6 @@ class QINCo(nn.Module):
         loss_embed = F.mse_loss(z_q_flat, residual_flat.detach())
         loss = loss_embed + self.beta * loss_commit
 
-        with torch.no_grad():
-            one_hot = F.one_hot(indices, num_classes=self.n_e).float()
-            avg_probs = one_hot.mean(0)
-            perplexity = torch.exp(- (avg_probs * (avg_probs + 1e-10).log()).sum())
-
         indices = indices.view(-1)
 
         return z_q, loss, indices
@@ -1193,7 +1167,7 @@ class SimVQ(AbstractQuantizer):
         """
         VectorQuantizer2-style forward for SimVQ.
         Supports 2D or 3D feature maps with channel-first format.
-        Returns: z_q, loss, (perplexity=None, _, indices)
+        Returns: z_q, loss, indices
         """
         z = z.float()  # ensure FP32 for distance computation
 
@@ -1677,12 +1651,7 @@ class MultiScaleResidualQuantizer(ResidualQuantizerBase):
                 f_hat = rotate_to(f_hat, f_BChw)
             else:
                 f_hat = (f_hat.data - f_no_grad).add_(f_BChw)
-        
-        # Calculate perplexity
-        encodings = F.one_hot(encoding_indices_list[-1], self.n_e).type(f_BChw.dtype)
-        perplexity = compute_perplexity(torch.mean(encodings, dim=0))
-        
-        # Return in the same format as other quantizers
+
         return f_hat, mean_vq_loss, encoding_indices_list
     # ===================== `forward` is only used in VAE training =====================
     
@@ -1988,11 +1957,6 @@ class MultiScaleResidualQuantizer3D(ResidualQuantizerBase):
                 f_hat = rotate_to(f_hat, f_input)
             else:
                 f_hat = (f_hat.data - f_no_grad).add_(f_input)
-        
-        # Calculate perplexity
-        encodings = F.one_hot(encoding_indices_list[-1], self.n_e).type(f_input.dtype)
-        perplexity = compute_perplexity(torch.mean(encodings, dim=0))
-        
 
         if tokenized_input:
             if self.dims == 2:
@@ -2456,18 +2420,6 @@ class FiniteScalarQuantizer(AbstractQuantizer):
         # Straight-through estimator for gradients: preserve encoder gradients
         z_q = straight_through_estimator(z, z_q)
 
-        # compute perplexity over indices
-        with torch.no_grad():
-            flat_inds = indices_flat
-            if self.codebook_size <= 2_000_000:
-                counts = torch.bincount(flat_inds, minlength=self.codebook_size).float()
-                probs = counts / counts.sum().clamp_min(1.0)
-                perplexity = compute_perplexity(probs)
-            else:
-                unique = torch.unique(flat_inds)
-                usage = unique.numel() / float(self.codebook_size)
-                perplexity = torch.tensor(usage * float(self.codebook_size), device=z.device)
-
         loss = commitment_loss
 
         return z_q, loss, indices
@@ -2549,11 +2501,7 @@ class SoftVectorQuantizer(AbstractQuantizer):
         # ``entropy_loss_weight``; gated on ``self.training``; returns zero
         # otherwise). Canonical formula for the whole quantizer family.
         entropy_loss = self.entropy_regularization(logits)
-        
-        # Calculate average probabilities  ==> just info no need
-        avg_probs = torch.mean(torch.mean(probs, dim=-1))
-        max_probs = torch.mean(torch.max(probs, dim=-1)[0])
-        
+
         # Restore shape (channel-first)
         z_q = unflatten_spatial_to_channel_first(z_q)
         

@@ -549,32 +549,20 @@ def test_vq2_accepts_new_entropy_kwargs():
     assert m.entropy_gamma == 1.2
 
 
-def test_vq2_legacy_entropy_kwargs_still_work():
-    # Old configs that pass entropy_loss_ratio / entropy_temperature must
-    # keep functioning — they are mapped to the new attribute names.
-    m = qn.VectorQuantizer2(
-        n_e=8, e_dim=4,
-        entropy_loss_ratio=0.1,
-        entropy_temperature=0.5,
-    )
-    assert m.entropy_loss_weight == 0.1
-    assert m.entropy_loss_temperature == 0.5
+def test_vq2_rejects_legacy_entropy_kwargs():
+    # Old-style kwargs are no longer accepted — callers must migrate to
+    # entropy_loss_weight / entropy_loss_temperature / entropy_gamma.
+    for legacy_name, value in [
+        ("entropy_loss_ratio", 0.1),
+        ("entropy_temperature", 0.5),
+        ("entropy_loss_type", "gumbel"),
+    ]:
+        with pytest.raises(TypeError, match=f"unexpected keyword argument '{legacy_name}'"):
+            qn.VectorQuantizer2(n_e=8, e_dim=4, **{legacy_name: value})
 
 
-def test_vq2_legacy_entropy_loss_type_is_silently_dropped():
-    # ``entropy_loss_type="gumbel"`` path is gone; accepting the kwarg for
-    # backward compat without erroring keeps configs with that field working.
-    m = qn.VectorQuantizer2(
-        n_e=8, e_dim=4,
-        entropy_loss_ratio=0.1,
-        entropy_loss_type="gumbel",   # silently ignored
-    )
-    assert m.entropy_loss_weight == 0.1
-    assert not hasattr(m, "entropy_loss_type")
-
-
-def test_vq2_unknown_kwarg_still_raises():
-    with pytest.raises(TypeError, match="unexpected kwargs"):
+def test_vq2_rejects_unknown_kwarg():
+    with pytest.raises(TypeError, match="unexpected keyword argument 'bogus_setting'"):
         qn.VectorQuantizer2(n_e=8, e_dim=4, bogus_setting=42)
 
 
