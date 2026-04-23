@@ -112,7 +112,7 @@ class VQModel(DiscreteFirstStage):
         return dec
 
     def forward(self, input, return_pred_indices=False):
-        quant, diff, (_,_,ind) = self.encode(input)
+        quant, diff, ind = self.encode(input)
         dec = self.decode(quant)
 
         if self.alignment is not None:
@@ -122,58 +122,6 @@ class VQModel(DiscreteFirstStage):
         if return_pred_indices:
             return dec, diff, ind
         return dec, diff
-
-    # # VAR/MSQR-specific methods
-    # def fhat_to_img(self, f_hat: torch.Tensor):
-    #     """Convert quantized features to image"""
-    #     self._check_msrq_features('fhat_to_img')
-    #     return self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1)
-    
-    # def img_to_idxBl(self, inp_img_no_grad: torch.Tensor, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None) -> List[torch.LongTensor]:
-    #     """Convert image to multi-scale indices"""
-    #     self._check_msrq_features('img_to_idxBl')
-    #     h = self.encoder(inp_img_no_grad)
-    #     if isinstance(h, tuple):
-    #         h = h[0]
-    #     f = self.quant_conv(h)
-    #     return self.quantizer.f_to_idxBl_or_fhat(f, to_fhat=False, v_patch_nums=v_patch_nums)
-    
-    # def idxBl_to_img(self, ms_idx_Bl: List[torch.Tensor], same_shape: bool, last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
-    #     """Convert multi-scale indices to image"""
-    #     self._check_msrq_features('idxBl_to_img')
-    #     B = ms_idx_Bl[0].shape[0]
-    #     ms_h_BChw = []
-    #     for idx_Bl in ms_idx_Bl:
-    #         l = idx_Bl.shape[1]
-    #         pn = round(l ** 0.5)
-    #         ms_h_BChw.append(self.quantizer.embedding(idx_Bl).transpose(1, 2).view(B, self.embed_dim, pn, pn))
-    #     return self.embed_to_img(ms_h_BChw=ms_h_BChw, all_to_max_scale=same_shape, last_one=last_one)
-    
-    # def embed_to_img(self, ms_h_BChw: List[torch.Tensor], all_to_max_scale: bool, last_one=False) -> Union[List[torch.Tensor], torch.Tensor]:
-    #     """Convert embeddings to image"""
-    #     self._check_msrq_features('embed_to_img')
-    #     if last_one:
-    #         return self.decoder(self.post_quant_conv(self.quantizer.embed_to_fhat(ms_h_BChw, all_to_max_scale=all_to_max_scale, last_one=True))).clamp_(-1, 1)
-    #     else:
-    #         return [self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1) for f_hat in self.quantizer.embed_to_fhat(ms_h_BChw, all_to_max_scale=all_to_max_scale, last_one=False)]
-    
-    # def img_to_reconstructed_img(self, x, v_patch_nums: Optional[Sequence[Union[int, Tuple[int, int]]]] = None, last_one=False) -> List[torch.Tensor]:
-    #     """Convert image to reconstructed image at multiple scales"""
-    #     self._check_msrq_features('img_to_reconstructed_img')
-    #     h = self.encoder(x)
-    #     if isinstance(h, tuple):
-    #         h = h[0]
-    #     f = self.quant_conv(h)
-    #     ls_f_hat_BChw = self.quantizer.f_to_idxBl_or_fhat(f, to_fhat=True, v_patch_nums=v_patch_nums)
-    #     if last_one:
-    #         return self.decoder(self.post_quant_conv(ls_f_hat_BChw[-1])).clamp_(-1, 1)
-    #     else:
-    #         return [self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1) for f_hat in ls_f_hat_BChw]
-
-    # def load_state_dict(self, state_dict: Dict[str, Any], strict=True, assign=False):
-    #     if 'quantizer.ema_vocab_hit_SV' in state_dict and state_dict['quantizer.ema_vocab_hit_SV'].shape[0] != self.quantizer.ema_vocab_hit_SV.shape[0]:
-    #         state_dict['quantizer.ema_vocab_hit_SV'] = self.quantizer.ema_vocab_hit_SV
-    #     return super().load_state_dict(state_dict=state_dict, strict=strict, assign=assign)
 
 
 class VQModelTransformer(DiscreteFirstStage):
@@ -266,7 +214,7 @@ class VQModelTransformer(DiscreteFirstStage):
         return dec
 
     def forward(self, input, return_pred_indices=False):
-        quant, diff, (_,_,ind), aux = self.encode(input)
+        quant, diff, ind, aux = self.encode(input)
         dec = self.decode(quant, aux=aux)
 
         if self.alignment is not None:

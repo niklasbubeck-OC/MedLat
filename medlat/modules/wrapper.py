@@ -334,17 +334,21 @@ class GenWrapper(nn.Module):
             self._update_scale_factor(quant)
         quant = quant * self.scale_factor
 
-        # ---- autoregressive path ----
+        # ``info`` carries the codebook indices directly for discrete first
+        # stages (Tensor for single-level quantizers, list of Tensors for
+        # residual ones). For continuous first stages and for the
+        # ``encode_to_prequant`` routing it is ``None``.
         if info is None:
             return quant
-        else:
-            _, _, indices = info
-            if isinstance(indices, torch.Tensor):  # normal
-                return indices.reshape(image.shape[0], -1)
-            elif isinstance(indices, (list, tuple)):  # residual quantizer
-                indices = [ind.reshape(image.shape[0], -1) for ind in indices]
-                return torch.cat(indices, dim=1)
-            return quant
+
+        # Autoregressive routing expects a flat index tensor the generator can
+        # consume; fall through to the quantised features for any other shape.
+        if isinstance(info, torch.Tensor):
+            return info.reshape(image.shape[0], -1)
+        if isinstance(info, (list, tuple)):
+            flat_per_level = [ind.reshape(image.shape[0], -1) for ind in info]
+            return torch.cat(flat_per_level, dim=1)
+        return quant
 
     # ---------------------------------------------------------------------
     # Decoding
