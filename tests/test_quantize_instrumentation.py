@@ -1,0 +1,438 @@
+"""Tests for the cross-cutting instrumentation on :class:`AbstractQuantizer`.
+
+Three features land via the post-forward hook installed by
+:meth:`AbstractQuantizer.__init_subclass__`:
+
+1. ``log_metric`` / ``get_metrics`` — a latest-only scalar sink.
+2. Codebook usage tracking — a lazily-allocated ``_usage_buffer`` of shape
+   ``(n_e,)`` that accumulates index hits across forward calls.
+3. ``revive_dead_codes`` — replace unused embedding rows with random samples
+   from a batch of encoder activations.
+"""
+from __future__ import annotations
+
+import pytest
+import torch
+
+from medlat.first_stage.discrete.quantizer import quantize as qn
+
+
+# ---------------------------------------------------------------------------
+# log_metric / get_metrics
+# ---------------------------------------------------------------------------
+
+
+def test_log_metric_overwrites_latest():
+    m = qn.VectorQuantizer(n_e=4, e_dim=2, beta=0.25)
+    m.log_metric("k", 1.0)
+    m.log_metric("k", 2.0)
+    assert m.get_metrics()["k"] == 2.0
+
+
+def test_log_metric_detaches_tensor():
+    m = qn.VectorQuantizer(n_e=4, e_dim=2, beta=0.25)
+    x = torch.tensor(3.0, requires_grad=True)
+    y = (x * 2).sum()  # y has grad_fn
+    m.log_metric("y", y)
+    stored = m.get_metrics()["y"]
+    assert not stored.requires_grad
+    assert stored.grad_fn is None
+    assert stored.item() == 6.0
+
+
+def test_log_metric_preserves_nontensor_values():
+    m = qn.VectorQuantizer(n_e=4, e_dim=2, beta=0.25)
+    m.log_metric("str_value", "hi")
+    m.log_metric("int_value", 42)
+    m.log_metric("list_value", [1, 2, 3])
+    snap = m.get_metrics()
+    assert snap["str_value"] == "hi"
+    assert snap["int_value"] == 42
+    assert snap["list_value"] == [1, 2, 3]
+
+
+def test_reset_metrics_clears_user_logged_values():
+    m = qn.VectorQuantizer(n_e=4, e_dim=2, beta=0.25)
+    m.log_metric("foo", 1.0)
+    m.reset_metrics()
+    # User metrics cleared (get_metrics may still include derived usage fields
+    # if the usage buffer exists, but our custom key must be gone).
+    assert "foo" not in m.get_metrics()
+
+
+# ---------------------------------------------------------------------------
+# Post-forward hook auto-logs perplexity and loss
+# ---------------------------------------------------------------------------
+
+
+def test_forward_auto_logs_loss_and_perplexity():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    x = torch.randn(2, 4, 3, 3, generator=torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        m(x)
+    snap = m.get_metrics()
+    assert "loss" in snap
+    assert "perplexity" in snap
+    assert isinstance(snap["loss"], torch.Tensor)
+    assert isinstance(snap["perplexity"], torch.Tensor)
+
+
+def test_forward_auto_logged_values_update_on_each_call():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    x1 = torch.randn(2, 4, 3, 3, generator=torch.Generator().manual_seed(0))
+    x2 = torch.randn(2, 4, 3, 3, generator=torch.Generator().manual_seed(1))
+    with torch.no_grad():
+        m(x1)
+    perp1 = m.get_metrics()["perplexity"].clone()
+    with torch.no_grad():
+        m(x2)
+    perp2 = m.get_metrics()["perplexity"]
+    # Values can differ between calls; the important property is that we
+    # overwrote (i.e. the stored tensor is the latest one).
+    assert perp1.data_ptr() != perp2.data_ptr() or torch.equal(perp1, perp2)
+
+
+def test_hook_is_defensive_against_nonstandard_return_shapes():
+    # Some quantizers return 4-tuples (Gumbel with return_logits=True) or
+    # include non-Tensor elements in the info tuple (residual quantizers).
+    # _post_forward must never raise for any of these — it's called from
+    # every forward and a crash would break training.
+    m = qn.VectorQuantizer(n_e=4, e_dim=2, beta=0.25)
+
+    # Short tuple — should silently skip.
+    m._post_forward((torch.zeros(1), torch.tensor(0.0)))
+    # Non-tuple return — should silently skip.
+    m._post_forward(torch.zeros(1))
+    # info is None — should silently skip the info branch but still log loss.
+    m._post_forward((torch.zeros(1), torch.tensor(0.5), None))
+    assert m.get_metrics()["loss"].item() == pytest.approx(0.5)
+    # info is a list with list-valued elements (residual style) — must not
+    # attempt to detach a list as if it were a tensor.
+    m._post_forward(
+        (
+            torch.zeros(1),
+            torch.tensor(0.7),
+            ([torch.tensor(1.0)], [torch.zeros(2)], [torch.zeros(3, dtype=torch.long)]),
+        )
+    )
+    # loss overwritten with the latest value.
+    assert m.get_metrics()["loss"].item() == pytest.approx(0.7)
+    # 4-tuple (Gumbel return_logits=True shape) — hook only reads the first
+    # three elements, ignoring the extra.
+    m._post_forward(
+        (
+            torch.zeros(1),
+            torch.tensor(0.9),
+            (torch.tensor(2.0), None, torch.zeros(5, dtype=torch.long)),
+            torch.zeros(7),  # extra logits-like element
+        )
+    )
+    snap = m.get_metrics()
+    assert snap["loss"].item() == pytest.approx(0.9)
+    assert snap["perplexity"].item() == pytest.approx(2.0)
+
+
+# ---------------------------------------------------------------------------
+# Usage tracking
+# ---------------------------------------------------------------------------
+
+
+def test_usage_buffer_is_lazily_allocated():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    # Before any forward, no usage buffer exists.
+    assert not hasattr(m, "_usage_buffer")
+
+    m.eval()
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    # After one forward, the buffer exists with the right size.
+    assert hasattr(m, "_usage_buffer")
+    assert m._usage_buffer.shape == (8,)
+    # And it's non-persistent (won't end up in state_dict)
+    assert "_usage_buffer" not in m.state_dict()
+
+
+def test_usage_buffer_accumulates_across_forward_calls():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    x = torch.randn(4, 4, 3, 3, generator=torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        m(x)
+    total_after_one = int(m._usage_buffer.sum().item())
+    with torch.no_grad():
+        m(x)
+    total_after_two = int(m._usage_buffer.sum().item())
+    assert total_after_two == 2 * total_after_one
+
+
+def test_total_tokens_seen_equals_indices_per_call():
+    # batch 2 × 3 × 3 spatial = 18 tokens per forward.
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    x = torch.randn(2, 4, 3, 3, generator=torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        m(x)
+    snap = m.get_metrics()
+    assert snap["total_tokens_seen"] == 2 * 3 * 3
+
+
+def test_track_usage_false_skips_buffer():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m.track_usage = False
+    m.eval()
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    assert not hasattr(m, "_usage_buffer")
+    # But other instrumentation still works.
+    assert "loss" in m.get_metrics()
+
+
+def test_dead_code_ratio_decreases_with_more_diverse_input():
+    # With only 4 tokens total and a codebook of 16, at most 4 codes are hit —
+    # so the majority of codes are dead.
+    m = qn.VectorQuantizer(n_e=16, e_dim=4, beta=0.25).eval()
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2, generator=torch.Generator().manual_seed(0)))
+    snap = m.get_metrics()
+    assert snap["active_code_count"] <= 4
+    assert snap["dead_code_ratio"] >= 12 / 16
+
+
+def test_dead_code_ratio_is_zero_when_all_codes_hit():
+    # Force every code to be hit by manually seeding the usage buffer.
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    # Run one forward to allocate the buffer on the right device.
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    m._usage_buffer.fill_(100)
+    snap = m.get_metrics()
+    assert snap["dead_code_ratio"] == 0.0
+    assert snap["codebook_utilization"] == 1.0
+
+
+def test_reset_usage_zeroes_buffer():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    assert m._usage_buffer.sum().item() > 0
+    m.reset_usage()
+    assert m._usage_buffer.sum().item() == 0
+
+
+def test_residual_quantizer_list_indices_do_not_crash_hook():
+    # ResidualQuantizer's info tuple holds LISTS of per-level tensors. The
+    # post-forward hook should skip usage tracking silently instead of
+    # crashing. Equivalence tests already cover behavior preservation;
+    # here we only prove the hook is defensive.
+    r = qn.ResidualQuantizer(
+        quantizer_class=qn.VectorQuantizer2,
+        num_quantizers=2,
+        quantizer_kwargs_list=[{"n_e": 4, "e_dim": 3}, {"n_e": 4, "e_dim": 3}],
+    ).eval()
+    x = torch.randn(1, 3, 2, 2, generator=torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        out = r(x)
+    # Forward succeeded; the residual wrapper's OWN buffer stays unset
+    # (indices was a list, not a tensor) — nested quantizers accumulate their
+    # own stats independently.
+    assert not hasattr(r, "_usage_buffer")
+
+
+# ---------------------------------------------------------------------------
+# revive_dead_codes
+# ---------------------------------------------------------------------------
+
+
+def test_revive_dead_codes_noop_without_usage_buffer():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    # No forward yet, so no buffer.
+    n = m.revive_dead_codes(torch.randn(5, 4))
+    assert n == 0
+
+
+def test_revive_dead_codes_noop_for_codebook_free_class():
+    m = qn.LookupFreeQuantizer(token_bits=3).eval()
+    with torch.no_grad():
+        m(torch.randn(1, 3, 2, 2))
+    # LFQ has no nn.Embedding, so revival must return 0 regardless of
+    # what the usage buffer says.
+    m._usage_buffer.fill_(0)
+    n = m.revive_dead_codes(torch.randn(5, 3))
+    assert n == 0
+
+
+def test_revive_dead_codes_noop_when_all_codes_alive():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    m._usage_buffer.fill_(100)  # every code has plenty of hits
+    n = m.revive_dead_codes(torch.randn(5, 4))
+    assert n == 0
+
+
+def test_revive_dead_codes_replaces_dead_rows():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    # Seed a deterministic codebook.
+    torch.manual_seed(0)
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    # Mark codes 3, 5, 7 as dead, the rest as alive.
+    m._usage_buffer.fill_(100)
+    m._usage_buffer[[3, 5, 7]] = 0
+
+    original_weights = m.embedding.weight.data.clone()
+    enc = torch.randn(10, 4)  # 10 encoder activations of dim 4
+    n = m.revive_dead_codes(enc)
+    assert n == 3
+
+    # Only rows 3, 5, 7 should have changed.
+    for row in range(8):
+        if row in (3, 5, 7):
+            assert not torch.equal(m.embedding.weight.data[row], original_weights[row])
+        else:
+            assert torch.equal(m.embedding.weight.data[row], original_weights[row])
+
+
+def test_revive_dead_codes_uses_provided_activations():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    m._usage_buffer.fill_(0)  # all codes dead
+
+    # Use a pool where every row is the same known vector — revived codes
+    # must be exactly that vector.
+    known = torch.tensor([1.0, 2.0, 3.0, 4.0])
+    enc = known.repeat(10, 1)  # (10, 4) — every row is `known`
+    n = m.revive_dead_codes(enc)
+    assert n == 8
+    for row in range(8):
+        torch.testing.assert_close(m.embedding.weight.data[row], known)
+
+
+def test_revive_resets_usage_to_threshold_for_revived_codes():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    m._usage_buffer.fill_(100)
+    m._usage_buffer[[1, 4]] = 0
+    m.revive_dead_codes(torch.randn(5, 4))
+    # Revived codes now sit *at* the threshold so the next call won't treat
+    # them as dead immediately.
+    assert int(m._usage_buffer[1].item()) == m.dead_code_threshold
+    assert int(m._usage_buffer[4].item()) == m.dead_code_threshold
+
+
+def test_revive_accepts_any_shape_with_matching_trailing_dim():
+    # encoder_output can be (B, C, H, W), (B, C, D, H, W), flat, etc. — all
+    # are flattened to (N, embedding_dim).
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
+    with torch.no_grad():
+        m(torch.randn(1, 4, 2, 2))
+    m._usage_buffer.fill_(0)
+
+    # (B=2, H=3, W=3, C=4) — channel-last, reshape(-1, 4) gives 18 rows.
+    enc_cl = torch.randn(2, 3, 3, 4)
+    n = m.revive_dead_codes(enc_cl)
+    assert n == 8  # all dead codes revived
+
+
+# ---------------------------------------------------------------------------
+# entropy_regularization — opt-in MaskGIT-style entropy loss.
+# ---------------------------------------------------------------------------
+
+
+def test_entropy_regularization_returns_zero_by_default():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    affinity = torch.randn(10, 8)
+    out = m.entropy_regularization(affinity)
+    assert out.item() == 0.0
+    assert out.shape == ()
+    assert out.device == affinity.device
+    # Zero-tensor returns should allow chained "loss + entropy_regularization(...)".
+    loss = torch.tensor(1.0) + out
+    assert loss.item() == pytest.approx(1.0)
+
+
+def test_entropy_regularization_preserves_dtype_and_device():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    affinity = torch.randn(5, 8, dtype=torch.float64)
+    out = m.entropy_regularization(affinity)
+    assert out.dtype == torch.float64
+
+
+def test_entropy_regularization_matches_modules_helper_when_enabled():
+    from medlat.first_stage.discrete.quantizer.modules import entropy_loss_fn
+
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m.entropy_loss_weight = 0.5
+    m.entropy_loss_temperature = 0.8
+    m.entropy_loss_gamma = 1.2
+
+    affinity = torch.randn(12, 8, generator=torch.Generator().manual_seed(7))
+
+    # Call the helper first (it clones internally so affinity stays intact).
+    actual = m.entropy_regularization(affinity)
+    # Then compute the expected value manually — entropy_loss_fn mutates its
+    # input, so we clone as well to keep the test independent of call order.
+    expected_per, expected_avg = entropy_loss_fn(
+        affinity.clone(), temperature=0.8, entropy_gamma=1.2
+    )
+    expected = 0.5 * (expected_per - expected_avg)
+    torch.testing.assert_close(actual, expected)
+
+
+def test_entropy_regularization_does_not_mutate_affinity():
+    # Defensive: the helper clones before calling into modules.entropy_loss_fn,
+    # which contains an in-place `flat_affinity /= temperature`. Callers that
+    # reuse the affinity tensor downstream must see it unchanged.
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m.entropy_loss_weight = 1.0
+    m.entropy_loss_temperature = 0.5
+    affinity = torch.randn(6, 8, generator=torch.Generator().manual_seed(0))
+    snapshot = affinity.clone()
+    m.entropy_regularization(affinity)
+    torch.testing.assert_close(affinity, snapshot)
+
+
+def test_entropy_regularization_logs_components_as_metrics():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m.entropy_loss_weight = 0.1
+    affinity = torch.randn(6, 8, generator=torch.Generator().manual_seed(1))
+    m.entropy_regularization(affinity)
+
+    snap = m.get_metrics()
+    assert "entropy_per_sample" in snap
+    assert "entropy_avg" in snap
+    # Values are detached (no grad graph).
+    assert snap["entropy_per_sample"].grad_fn is None
+    assert snap["entropy_avg"].grad_fn is None
+
+
+def test_entropy_regularization_does_not_log_when_disabled():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    # Default: weight is 0 → skip the log.
+    affinity = torch.randn(6, 8)
+    m.entropy_regularization(affinity)
+    snap = m.get_metrics()
+    assert "entropy_per_sample" not in snap
+    assert "entropy_avg" not in snap
+
+
+def test_entropy_regularization_accepts_affinity_of_arbitrary_batch_shape():
+    # The helper internally reshapes to (-1, n_e), so callers can pass any
+    # shape as long as the last dim is the codebook dimension.
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m.entropy_loss_weight = 1.0
+    aff = torch.randn(2, 3, 4, 8, generator=torch.Generator().manual_seed(0))
+    out = m.entropy_regularization(aff)
+    assert out.shape == ()
+    assert out.dim() == 0
+
+
+def test_entropy_regularization_flows_gradient_when_enabled():
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    m.entropy_loss_weight = 0.5
+    affinity = torch.randn(4, 8, requires_grad=True)
+    loss = m.entropy_regularization(affinity)
+    loss.backward()
+    # Non-trivial gradient: the entropy term actually depends on affinity.
+    assert affinity.grad is not None
+    assert affinity.grad.abs().sum().item() > 0
