@@ -31,6 +31,7 @@ from medlat.first_stage.modules.gaussian_dist import (
     _DeterministicPosterior,
 )
 from medlat.modules.alignments import AlignmentModule
+from medlat.modules.metrics import MetricLoggerMixin
 from medlat.utils import init_from_ckpt
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ __all__ = ["AutoencoderKL", "AutoencoderKLTransformer"]
 Posterior = Union[DiagonalGaussianDistribution, _DeterministicPosterior]
 
 
-class AutoencoderKLBase(ContinuousFirstStage):
+class AutoencoderKLBase(MetricLoggerMixin, ContinuousFirstStage):
     """Shared plumbing for KL-regularised continuous autoencoders.
 
     Concrete subclasses supply the pre/post-quant layer construction via
@@ -49,6 +50,14 @@ class AutoencoderKLBase(ContinuousFirstStage):
     state (e.g. masking info), override :meth:`_run_encoder` and
     :meth:`_run_decoder` to route that state through without leaking it into
     the public interface.
+
+    Observability
+    -------------
+    Inherits ``log_metric`` / ``get_metrics`` / ``reset_metrics`` from
+    :class:`MetricLoggerMixin`. Each submodule owns its own logging: the
+    alignment module (when configured) publishes ``"alignment_loss"`` from
+    its own forward. :meth:`get_metrics` merges that into the same flat dict
+    so training loops can just ``wandb.log(model.get_metrics())``.
     """
 
     def __init__(
@@ -219,6 +228,24 @@ class AutoencoderKLBase(ContinuousFirstStage):
             loss = loss + alignment_loss
 
         return dec, loss
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Merge model- and alignment-level metrics into a single flat snapshot.
+
+        The alignment module (when configured) publishes ``"alignment_loss"``
+        and any subclass-specific keys from its own forward. AutoencoderKL
+        doesn't log anything itself by default; this override just
+        aggregates so training loops can ``wandb.log(model.get_metrics())``
+        without caring where each number came from.
+
+        Precedence on key collisions: model-level (user ``log_metric`` calls)
+        > alignment.
+        """
+        merged = super().get_metrics()  # model-level via MetricLoggerMixin
+        if self.alignment is not None and hasattr(self.alignment, "get_metrics"):
+            for k, v in self.alignment.get_metrics().items():
+                merged.setdefault(k, v)
+        return merged
 
 
 # ---------------------------------------------------------------------------
