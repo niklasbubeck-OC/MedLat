@@ -209,6 +209,51 @@ def test_dead_code_ratio_is_zero_when_all_codes_hit():
     assert snap["codebook_utilization"] == 1.0
 
 
+def test_instrumentation_kwargs_accepted_at_construction():
+    # Every concrete subclass accepts track_usage / dead_code_threshold /
+    # revive_dead_codes_after as constructor kwargs via the __init_subclass__
+    # wrap — the subclass's own __init__ signature doesn't need to declare them.
+    m = qn.VectorQuantizer(
+        n_e=8, e_dim=4, beta=0.25,
+        track_usage=False,
+        dead_code_threshold=5,
+        revive_dead_codes_after=100,
+    )
+    assert m.track_usage is False
+    assert m.dead_code_threshold == 5
+    assert m.revive_dead_codes_after == 100
+
+
+def test_instrumentation_kwargs_work_via_get_model():
+    # Same kwargs must flow through the registry path too.
+    from medlat import get_model
+
+    m = get_model(
+        "discrete.quantizer.vector_quantizer",
+        n_e=8, e_dim=4, beta=0.25,
+        revive_dead_codes_after=250,
+        dead_code_threshold=3,
+    )
+    assert m.revive_dead_codes_after == 250
+    assert m.dead_code_threshold == 3
+
+
+def test_instrumentation_kwargs_work_on_transitively_wrapped_subclasses():
+    # SimpleQINCo inherits VectorQuantizer2's __init__ via super(); the
+    # kwarg wrap still fires at SimpleQINCo's own __init_subclass__ so users
+    # can pass instrumentation kwargs there too.
+    m = qn.SimpleQINCo(n_e=8, e_dim=4, revive_dead_codes_after=42)
+    assert m.revive_dead_codes_after == 42
+
+
+def test_instrumentation_kwargs_preserve_subclass_defaults_when_not_passed():
+    # Omitting the kwargs keeps the class-level defaults (0 / 1 / True).
+    m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25)
+    assert m.track_usage is True
+    assert m.dead_code_threshold == 1
+    assert m.revive_dead_codes_after == 0
+
+
 def test_reset_usage_zeroes_buffer():
     m = qn.VectorQuantizer(n_e=8, e_dim=4, beta=0.25).eval()
     with torch.no_grad():

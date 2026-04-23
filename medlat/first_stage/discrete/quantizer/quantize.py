@@ -271,6 +271,19 @@ class AbstractQuantizer(nn.Module, ABC):
       ``nn.Embedding``. Set :attr:`revive_dead_codes_after` at construction
       to have the quantizer auto-call this every N forward passes during
       training — no need to wire it into your own loop.
+
+    **Instrumentation kwargs at construction**
+
+    ``track_usage``, ``dead_code_threshold``, and ``revive_dead_codes_after``
+    are implicit constructor kwargs on every subclass — :meth:`__init_subclass__`
+    pops them out of the call before the subclass's own ``__init__`` sees
+    them and sets them on the instance once construction finishes. Pass them
+    directly to :func:`~medlat.get_model` or the factory::
+
+        m = get_model("discrete.quantizer.vector_quantizer2",
+                      n_e=8192, e_dim=16,
+                      revive_dead_codes_after=1000,
+                      dead_code_threshold=5)
     * :meth:`entropy_regularization` — opt-in SoftVQ-style entropy loss term,
       the formula shared by every quantizer in the family. Configured via
       :attr:`entropy_loss_weight`, :attr:`entropy_loss_temperature`, and
@@ -315,6 +328,22 @@ class AbstractQuantizer(nn.Module, ABC):
     #: a populated usage buffer (i.e. at least one prior forward pass).
     revive_dead_codes_after: int = 0
 
+    #: Instrumentation kwargs that every subclass ``__init__`` implicitly
+    #: accepts — :meth:`__init_subclass__` wraps each concrete ``__init__`` to
+    #: pop these from the call, forward the remaining kwargs through to the
+    #: subclass body, and ``setattr`` them on the instance once construction
+    #: finishes. Users can therefore pass any of them at instantiation time::
+    #:
+    #:     m = get_model("discrete.quantizer.vector_quantizer",
+    #:                   n_e=1024, e_dim=8, revive_dead_codes_after=1000)
+    #:
+    #: without the underlying factory's signature having to declare them.
+    _INSTRUMENTATION_KWARGS = (
+        "track_usage",
+        "dead_code_threshold",
+        "revive_dead_codes_after",
+    )
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         # Only wrap classes that define their own ``forward`` (a concrete
@@ -341,6 +370,28 @@ class AbstractQuantizer(nn.Module, ABC):
                 return output
 
             cls.forward = forward_with_instrumentation
+
+        # Wrap ``__init__`` so every subclass implicitly accepts the
+        # instrumentation kwargs without having to declare them. Only wrap
+        # classes that define their own ``__init__``; classes inheriting a
+        # parent's ``__init__`` (e.g. BinarySphericalQuantizer inheriting
+        # LookupFreeQuantizer's) pick up the parent's already-wrapped init.
+        if "__init__" in cls.__dict__:
+            original_init = cls.__init__
+            instrumentation_keys = cls._INSTRUMENTATION_KWARGS
+
+            @wraps(original_init)
+            def init_with_instrumentation(self, *args, **kwargs):
+                overrides = {
+                    k: kwargs.pop(k)
+                    for k in instrumentation_keys
+                    if k in kwargs
+                }
+                original_init(self, *args, **kwargs)
+                for k, v in overrides.items():
+                    setattr(self, k, v)
+
+            cls.__init__ = init_with_instrumentation
 
     @abstractmethod
     def forward(
