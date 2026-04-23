@@ -1,9 +1,9 @@
-"""Unit tests for medlat.transport.utils — EasyDict / mean_flat / log_state."""
+"""Unit tests for medlat.scheduling.utils — EasyDict / mean_flat / log_state."""
 from __future__ import annotations
 
 import torch
 
-from medlat.transport.utils import EasyDict, log_state, mean_flat
+from medlat.scheduling.utils import EasyDict, log_state, mean_flat
 
 
 # ---------------------------------------------------------------------------

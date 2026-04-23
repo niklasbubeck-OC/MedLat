@@ -1,4 +1,4 @@
-"""Unit tests for medlat.transport.path — flow-matching coupling plans.
+"""Unit tests for medlat.scheduling.path — flow-matching coupling plans.
 
 These plans are pure math (no learnable parameters), so we can verify them
 against known boundary conditions and interior identities.
@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from medlat.transport.path import (
+from medlat.scheduling.path import (
     GVPCPlan,
     ICPlan,
     VPCPlan,

@@ -494,7 +494,7 @@ Standalone quantizer modules (for custom VQ composition):
 | **LDM** | Latent Diffusion UNet (various strides) | `ldm.f1` … `ldm.f16` | [arXiv](https://arxiv.org/abs/2112.10752) |
 | **ADM** | Dhariwal–Nichol UNet + class-conditional classifiers | `adm.diffusion.{64,128,256,512}{C,U}`, `adm.classifier.*` | [arXiv](https://arxiv.org/abs/2105.05233) |
 
-All diffusion generators integrate with `medlat.diffusion.create_gaussian_diffusion`.
+All diffusion generators integrate with `medlat.scheduling.create_gaussian_diffusion`.
 
 ---
 
